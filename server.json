@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.anish632/ground-truth",
+  "description": "Validate AI claims against live data: check endpoints, count competitors, test hypotheses.",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/anish632/ground-truth-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@anish632/ground-truth-mcp",
+      "version": "0.2.0",
+      "transport": { "type": "stdio" }
+    }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
+    }
+  ]
+}
