@@ -1,6 +1,8 @@
 {
-	"name": "@anishnpm/ground-truth-mcp",
-	"version": "0.2.0",
+	"name": "@anish632/ground-truth-mcp",
+	"version": "0.3.0",
+	"mcpName": "io.github.anish632/ground-truth",
+	"description": "Validate AI claims against live data: check endpoints, count competitors, test hypotheses.",
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
