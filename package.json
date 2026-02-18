@@ -1,27 +1,22 @@
 {
-	"name": "@anish632/ground-truth-mcp",
-	"version": "0.3.0",
+	"name": "ground-truth-mcp",
+	"version": "0.1.0",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "Validate AI claims against live data: check endpoints, count competitors, test hypotheses.",
+	"description": "MCP server that lets AI agents validate their own claims by checking real endpoints, counting market competitors, and testing hypotheses against live data.",
+	"private": true,
 	"scripts": {
-		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
-		"format": "oxfmt --write .",
-		"lint:fix": "oxlint --fix",
 		"start": "wrangler dev",
-		"cf-typegen": "wrangler types",
-		"type-check": "tsc --noEmit"
+		"deploy": "wrangler deploy",
+		"cf-typegen": "wrangler types --env-interface Env"
 	},
 	"dependencies": {
-		"@x402/core": "^2.3.1",
-		"@x402/evm": "^2.3.1",
-		"agents": "^0.5.0",
-		"zod": "^4.3.6"
+		"agents": "^0.4.0",
+		"@modelcontextprotocol/sdk": "^1.11.0",
+		"zod": "^3.24.0"
 	},
 	"devDependencies": {
-		"oxfmt": "^0.32.0",
-		"oxlint": "^1.47.0",
-		"typescript": "5.9.3",
-		"wrangler": "^4.65.0"
+		"@cloudflare/workers-types": "^4.20250204.0",
+		"typescript": "^5.7.3",
+		"wrangler": "^4.0.0"
 	}
 }

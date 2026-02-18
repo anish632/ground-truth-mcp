@@ -1,64 +1,78 @@
 # Ground Truth MCP Server
 
-A remote MCP server that lets AI agents validate their own claims against live data. Built on Cloudflare Workers with x402 micropayments on Base Sepolia.
+**Validate AI claims against live data.**
+
+An MCP server that lets AI agents fact-check their own research in real time — probing endpoints, counting competitors, and testing hypotheses against live registries instead of guessing.
+
+## Origin
+
+This tool was born from an AI agent catching itself giving bad advice. During a research conversation about MCP business opportunities, the agent recommended building products based on claims like "competition is low" and "this API is freely available" — then built a prototype to test those claims and discovered several were wrong. Competitors it said didn't exist already had packages on npm. An API it recommended building on top of couldn't even be reached.
+
+Ground Truth is the tool that conversation needed.
 
 ## Tools
 
-| Tool | Price | Description |
-|------|-------|-------------|
-| `check_endpoint` | Free | Probe a URL — returns status, auth flags, response time, content sample |
-| `estimate_market` | $0.01 | Search npm or PyPI — returns total count + top results |
-| `check_pricing` | $0.02 | Extract pricing signals from any URL — prices, plans, free tiers |
-| `compare_competitors` | $0.03 | Side-by-side npm/PyPI package comparison |
-| `verify_claim` | $0.05 | Cross-reference a claim against multiple URLs with keyword matching |
-| `test_hypothesis` | $0.05 | Run a battery of live tests against a factual claim |
+### `check_endpoint`
+Probe a URL or API endpoint. Returns HTTP status, content type, response time, auth requirements, rate limit headers, and a structural summary of the response.
 
-All paid tools use [x402](https://x402.org) for USDC micropayments on Base Sepolia. Results are cached for 5 minutes via Durable Object SQLite storage.
+```
+"Is this API actually accessible, or am I recommending something that doesn't work?"
+```
+
+### `estimate_market`
+Count packages/servers in a space on npm or PyPI. Returns total count, top results with version history and update dates, and activity signals.
+
+```
+"I'm about to say 'competition is low' — is that actually true?"
+```
+
+### `test_hypothesis`
+Test a factual claim against multiple live checks. Returns pass/fail per test and an overall verdict: SUPPORTED, REFUTED, or PARTIALLY SUPPORTED.
+
+```
+"Before I present this conclusion, let me verify it."
+```
 
 ## Connect
 
-### Remote (Streamable HTTP)
+### MCP Inspector (quickest test)
+```bash
+npx @modelcontextprotocol/inspector@latest
+# Enter: https://ground-truth-mcp.<your-subdomain>.workers.dev/mcp
+```
 
+### Claude Desktop
+Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
-      "transport": "streamable-http"
+      "url": "https://ground-truth-mcp.<your-subdomain>.workers.dev/mcp"
     }
   }
 }
 ```
 
-### MCP Inspector
-
-```bash
-npx @modelcontextprotocol/inspector@latest
-# Connect to: https://ground-truth-mcp.anishdasmail.workers.dev/mcp
-```
+### Any MCP Client
+Connect to `https://ground-truth-mcp.<your-subdomain>.workers.dev/mcp` via Streamable HTTP transport.
 
 ## Develop
 
 ```bash
 npm install
-npm run dev          # local server at http://localhost:8787/mcp
-npm run type-check   # typecheck
-npm run deploy       # deploy to Cloudflare
+npm start          # local dev server at http://localhost:8787/mcp
+npm run deploy     # deploy to Cloudflare Workers
 ```
 
-## What it catches
+## What It Caught (First Run)
 
-| Claim | Reality | Tool used |
-|-------|---------|-----------|
-| "There are only 2-3 MCP memory servers" | npm shows 50+ results for "mcp memory" | `estimate_market` |
-| "This API returns JSON" | Actually returns XML with 403 | `check_endpoint` |
-| "Library X is more popular than Y" | X has 12 versions, Y has 847 | `compare_competitors` |
-| "Service X is free" | Pricing page shows $29/mo minimum | `check_pricing` |
+| Claim | Verdict |
+|-------|---------|
+| "Memory MCP server competition is Medium" | ⚠️ Medium but actively growing — 12+ packages, several updated this week |
+| "Email/SMS MCP servers: very low competition" | ❌ Wrong — `twilio-mcp` and `mcp-send-email` already exist |
+| "Business verification MCP space is empty" | ✅ Confirmed — no relevant packages found |
+| "OpenCorporates has a free API" | ❌ Could not verify — API unreachable |
 
-## Architecture
+## License
 
-- **Runtime:** Cloudflare Workers + Durable Objects
-- **Protocol:** MCP over Streamable HTTP
-- **Payments:** x402 USDC micropayments on Base Sepolia
-- **Cache:** SQLite in Durable Object storage (5min TTL)
-- **Registry:** Published to MCP Registry, MCP.so, Glama, PulseMCP
+MIT

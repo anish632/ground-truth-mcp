@@ -1,28 +1,21 @@
-/**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "ground-truth-mcp",
-	"main": "src/index.ts",
+	"main": "./src/index.ts",
 	"compatibility_date": "2026-01-01",
 	"compatibility_flags": ["nodejs_compat"],
-	"migrations": [
-		{
-			"new_sqlite_classes": ["GroundTruthMCP"],
-			"tag": "v1"
-		}
-	],
 	"durable_objects": {
 		"bindings": [
 			{
-				"class_name": "GroundTruthMCP",
-				"name": "MCP_OBJECT"
+				"name": "MCP_OBJECT",
+				"class_name": "GroundTruthMCP"
 			}
 		]
 	},
-	"observability": {
-		"enabled": true
-	}
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["GroundTruthMCP"]
+		}
+	]
 }
