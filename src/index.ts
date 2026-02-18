@@ -89,7 +89,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
   async init() {
     // Initialize cache table
     this.sql`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, data TEXT, ts INTEGER)`;
-    const sql = this.sql;
+    const sql = this.sql.bind(this) as SqlTagFn;
 
     // ───────────────────────────────────────────────
     // FREE: check_endpoint

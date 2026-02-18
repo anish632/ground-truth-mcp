@@ -7,7 +7,8 @@
 	"scripts": {
 		"start": "wrangler dev",
 		"deploy": "wrangler deploy",
-		"cf-typegen": "wrangler types --env-interface Env"
+		"cf-typegen": "wrangler types --env-interface Env",
+		"test:x402": "node test-x402-payment.mjs"
 	},
 	"dependencies": {
 		"agents": "^0.4.0",
