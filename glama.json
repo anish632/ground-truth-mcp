@@ -1,0 +1,36 @@
+{
+  "name": "ground-truth-mcp",
+  "description": "MCP server that lets AI agents validate their own claims by checking real endpoints, counting market competitors, and testing hypotheses against live data.",
+  "author": "anish632",
+  "repository": "https://github.com/anish632/ground-truth-mcp",
+  "license": "MIT",
+  "runtime": "cloudflare-workers",
+  "transport": "streamable-http",
+  "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
+  "tools": [
+    {
+      "name": "check_endpoint",
+      "description": "Probe a URL/API endpoint and report status, auth requirements, response time, content type, and sample response."
+    },
+    {
+      "name": "estimate_market",
+      "description": "Search npm or PyPI and return total count, top results with versions and activity signals."
+    },
+    {
+      "name": "check_pricing",
+      "description": "Fetch a pricing page and extract price points, plan names, and free tier availability."
+    },
+    {
+      "name": "compare_competitors",
+      "description": "Compare two or more npm/PyPI packages side-by-side with version, description, and metadata."
+    },
+    {
+      "name": "verify_claim",
+      "description": "Cross-reference a factual claim against multiple live sources using keyword matching."
+    },
+    {
+      "name": "test_hypothesis",
+      "description": "Test a factual claim against live data with structured pass/fail tests and an overall verdict."
+    }
+  ]
+}

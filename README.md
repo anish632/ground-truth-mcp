@@ -1,5 +1,7 @@
 # Ground Truth MCP Server
 
+<a href="https://glama.ai/mcp/servers/@anish632/ground-truth-mcp"><img width="380" height="200" src="https://glama.ai/mcp/servers/@anish632/ground-truth-mcp/badge" alt="Ground Truth MCP server" /></a>
+
 **Validate AI claims against live data.**
 
 An MCP server that lets AI agents fact-check their own research in real time — probing endpoints, counting competitors, and testing hypotheses against live registries instead of guessing.
@@ -38,7 +40,7 @@ Test a factual claim against multiple live checks. Returns pass/fail per test an
 ### MCP Inspector (quickest test)
 ```bash
 npx @modelcontextprotocol/inspector@latest
-# Enter: https://ground-truth-mcp.<your-subdomain>.workers.dev/mcp
+# Enter: https://ground-truth-mcp.anishdasmail.workers.dev/mcp
 ```
 
 ### Claude Desktop
@@ -47,14 +49,14 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.<your-subdomain>.workers.dev/mcp"
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
     }
   }
 }
 ```
 
 ### Any MCP Client
-Connect to `https://ground-truth-mcp.<your-subdomain>.workers.dev/mcp` via Streamable HTTP transport.
+Connect to `https://ground-truth-mcp.anishdasmail.workers.dev/mcp` via Streamable HTTP transport.
 
 ## Develop
 
