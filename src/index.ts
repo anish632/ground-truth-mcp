@@ -89,7 +89,12 @@ export class GroundTruthMCP extends McpAgent<Env> {
   async init() {
     // Initialize cache table
     this.sql`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, data TEXT, ts INTEGER)`;
+    // Initialize usage log table
+    this.sql`CREATE TABLE IF NOT EXISTS usage_log (id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT, ts INTEGER, success INTEGER)`;
     const sql = this.sql.bind(this) as SqlTagFn;
+    const logUsage = (tool: string, success: boolean) => {
+      try { this.sql`INSERT INTO usage_log (tool, ts, success) VALUES (${tool}, ${Date.now()}, ${success ? 1 : 0})`; } catch (_) {}
+    };
 
     // ───────────────────────────────────────────────
     // FREE: check_endpoint
@@ -112,6 +117,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           const elapsed = Date.now() - start;
           const body = await resp.text();
           const sample = body.slice(0, 1000);
+          logUsage("check_endpoint", true);
 
           return {
             content: [{
@@ -130,6 +136,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           };
         } catch (e: unknown) {
           const message = e instanceof Error ? e.message : String(e);
+          logUsage("check_endpoint", false);
           return {
             content: [{
               type: "text" as const,
@@ -173,6 +180,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
               score: pkg.score?.final?.toFixed(3),
             });
           }
+          logUsage("estimate_market", true);
           return {
             content: [{
               type: "text" as const,
@@ -227,6 +235,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           const hasFree = /free\s*(?:plan|tier|forever|trial)|(?:\$0|0\.00)/i.test(body);
           const hasFreeTrial = /free\s*trial|try\s*(?:it\s*)?free|start\s*free/i.test(body);
 
+          logUsage("check_pricing", true);
           return {
             content: [{
               type: "text" as const,
@@ -313,7 +322,8 @@ export class GroundTruthMCP extends McpAgent<Env> {
             }
           }
         }
-        return {
+        logUsage("compare_competitors", true);
+          return {
           content: [{
             type: "text" as const,
             text: JSON.stringify({ packages, registry, comparisons }, null, 2),
@@ -366,7 +376,8 @@ export class GroundTruthMCP extends McpAgent<Env> {
           }
         }
         const supporting = sources.filter(s => s.supports).length;
-        return {
+        logUsage("verify_claim", true);
+          return {
           content: [{
             type: "text" as const,
             text: JSON.stringify({
@@ -458,7 +469,8 @@ export class GroundTruthMCP extends McpAgent<Env> {
           });
         }
         const passedCount = results.filter(r => r.passed).length;
-        return {
+        logUsage("test_hypothesis", true);
+          return {
           content: [{
             type: "text" as const,
             text: JSON.stringify({
@@ -502,6 +514,19 @@ export default {
 </html>`,
         { headers: { "Content-Type": "text/html" } }
       );
+    }
+
+    if (url.pathname === "/stats") {
+      try {
+        const id = env.GROUND_TRUTH_MCP.idFromName("ground-truth");
+        const stub = env.GROUND_TRUTH_MCP.get(id);
+        return stub.fetch(new Request("https://internal/stats"));
+      } catch {
+        return new Response(JSON.stringify({ error: "Stats unavailable" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
     }
 
     return new Response("Not found", { status: 404 });
