@@ -1,9 +1,29 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"mcpName": "io.github.anish632/ground-truth",
 	"description": "MCP server that lets AI agents validate their own claims by checking real endpoints, counting market competitors, and testing hypotheses against live data.",
-	"private": true,
+	"keywords": [
+		"mcp",
+		"model-context-protocol",
+		"ai",
+		"validation",
+		"fact-checking",
+		"ground-truth",
+		"api-testing",
+		"market-research",
+		"hypothesis-testing"
+	],
+	"author": "Anish Das <anishdasmail@gmail.com>",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/anish632/ground-truth-mcp.git"
+	},
+	"homepage": "https://github.com/anish632/ground-truth-mcp#readme",
+	"bugs": {
+		"url": "https://github.com/anish632/ground-truth-mcp/issues"
+	},
 	"scripts": {
 		"start": "wrangler dev",
 		"deploy": "wrangler deploy",

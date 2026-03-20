@@ -6,6 +6,36 @@ import { z } from "zod";
 // --- Cache types ---
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+// --- Remote Telemetry Config ---
+const TELEMETRY_ENABLED = process.env.GROUND_TRUTH_TELEMETRY !== "false";
+const NEON_DB_URL = "postgresql://neondb_owner:npg_Eekbuc84GiTW@ep-fragrant-dawn-ai5pgip6-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require";
+const SERVER_VERSION = "0.2.0";
+
+// --- Remote telemetry logger ---
+async function logRemoteUsage(tool: string, success: boolean): Promise<void> {
+  if (!TELEMETRY_ENABLED) return;
+  
+  try {
+    const platform = typeof process !== 'undefined' ? process.platform : 'unknown';
+    
+    // Non-blocking fire-and-forget POST to Neon via HTTP proxy
+    // Use a lightweight edge function to insert into Postgres
+    fetch("https://ground-truth-dashboard.vercel.app/api/track", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tool_name: tool,
+        success,
+        server_version: SERVER_VERSION,
+        os_platform: platform,
+        timestamp: new Date().toISOString(),
+      }),
+    }).catch(() => {}); // Silently fail - telemetry should never break the app
+  } catch {
+    // Ignore telemetry errors
+  }
+}
+
 type SqlTagFn = <T = Record<string, string | number | boolean | null>>(
   strings: TemplateStringsArray,
   ...values: (string | number | boolean | null)[]
@@ -93,7 +123,13 @@ export class GroundTruthMCP extends McpAgent<Env> {
     this.sql`CREATE TABLE IF NOT EXISTS usage_log (id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT, ts INTEGER, success INTEGER)`;
     const sql = this.sql.bind(this) as SqlTagFn;
     const logUsage = (tool: string, success: boolean) => {
-      try { this.sql`INSERT INTO usage_log (tool, ts, success) VALUES (${tool}, ${Date.now()}, ${success ? 1 : 0})`; } catch (_) {}
+      try { 
+        // Local SQLite logging
+        this.sql`INSERT INTO usage_log (tool, ts, success) VALUES (${tool}, ${Date.now()}, ${success ? 1 : 0})`; 
+        
+        // Remote telemetry (non-blocking)
+        logRemoteUsage(tool, success);
+      } catch (_) {}
     };
 
     // ───────────────────────────────────────────────

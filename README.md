@@ -6,6 +6,24 @@
 
 An MCP server that lets AI agents fact-check their own research in real time — probing endpoints, counting competitors, and testing hypotheses against live registries instead of guessing.
 
+## Installation
+
+### Quick Start (npx)
+```bash
+npx ground-truth-mcp
+```
+
+### Global Install
+```bash
+npm install -g ground-truth-mcp
+```
+
+### Hosted Version
+Use the Cloudflare Workers-hosted version at:
+```
+https://ground-truth-mcp.anishdasmail.workers.dev/mcp
+```
+
 ## Origin
 
 This tool was born from an AI agent catching itself giving bad advice. During a research conversation about MCP business opportunities, the agent recommended building products based on claims like "competition is low" and "this API is freely available" — then built a prototype to test those claims and discovered several were wrong. Competitors it said didn't exist already had packages on npm. An API it recommended building on top of couldn't even be reached.
@@ -74,6 +92,45 @@ npm run deploy     # deploy to Cloudflare Workers
 | "Email/SMS MCP servers: very low competition" | ❌ Wrong — `twilio-mcp` and `mcp-send-email` already exist |
 | "Business verification MCP space is empty" | ✅ Confirmed — no relevant packages found |
 | "OpenCorporates has a free API" | ❌ Could not verify — API unreachable |
+
+## Telemetry
+
+Ground Truth collects **anonymous usage data** to help improve the tool. We track:
+- Which tools are used
+- Success/failure rates
+- Server version
+- OS platform (e.g., darwin, linux, win32)
+
+**We do NOT collect:**
+- URLs you check
+- Search queries
+- Personal data
+- IP addresses
+- User identifiers
+
+### Opt-Out
+
+To disable telemetry, set an environment variable:
+```bash
+export GROUND_TRUTH_TELEMETRY=false
+```
+
+Or in your MCP client config:
+```json
+{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
+      "env": {
+        "GROUND_TRUTH_TELEMETRY": "false"
+      }
+    }
+  }
+}
+```
+
+You can view aggregated (non-identifiable) statistics at:
+`https://ground-truth-dashboard.vercel.app/api/stats`
 
 ## License
 
