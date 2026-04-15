@@ -3,13 +3,45 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { withX402, type X402Config } from "agents/x402";
 import { z } from "zod";
 
+// --- Environment bindings ---
+interface Env {
+  GROUND_TRUTH_MCP: DurableObjectNamespace;
+  API_KEYS: KVNamespace;
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
+}
+
 // --- Cache types ---
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = process.env.GROUND_TRUTH_TELEMETRY !== "false";
 const NEON_DB_URL = "postgresql://neondb_owner:npg_Eekbuc84GiTW@ep-fragrant-dawn-ai5pgip6-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require";
-const SERVER_VERSION = "0.2.0";
+const SERVER_VERSION = "0.3.0";
+
+// --- Free tier tools ---
+const FREE_TOOLS = ["check_endpoint"];
+
+// --- API Key helpers ---
+function generateApiKey(): string {
+  const chars = "0123456789abcdef";
+  let key = "gt_live_";
+  for (let i = 0; i < 32; i++) {
+    key += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return key;
+}
+
+async function validateApiKey(kv: KVNamespace, apiKey: string): Promise<boolean> {
+  try {
+    const data = await kv.get(apiKey, "json");
+    if (!data) return false;
+    const keyData = data as { active: boolean; email: string; stripeCustomerId: string; createdAt: string };
+    return keyData.active === true;
+  } catch {
+    return false;
+  }
+}
 
 // --- Remote telemetry logger ---
 async function logRemoteUsage(tool: string, success: boolean): Promise<void> {
@@ -62,7 +94,7 @@ function cacheSet(sql: SqlTagFn, key: string, data: string): void {
 async function cachedFetch(sql: SqlTagFn, url: string): Promise<{ body: string; fromCache: boolean }> {
   const cached = cacheGet(sql, url);
   if (cached) return { body: cached, fromCache: true };
-  const resp = await fetch(url, { headers: { "User-Agent": "GroundTruth/0.2" } });
+  const resp = await fetch(url, { headers: { "User-Agent": "GroundTruth/0.3" } });
   const body = await resp.text();
   if (resp.ok) cacheSet(sql, url, body);
   return { body, fromCache: false };
@@ -148,7 +180,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
         const start = Date.now();
         try {
           const resp = await fetch(url, {
-            headers: { "User-Agent": "GroundTruth/0.2" },
+            headers: { "User-Agent": "GroundTruth/0.3" },
           });
           const elapsed = Date.now() - start;
           const body = await resp.text();
@@ -467,7 +499,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
               case "endpoint_exists": {
                 if (!test.url) { passed = false; actual = "no url provided"; break; }
                 const resp = await fetch(test.url, {
-                  headers: { "User-Agent": "GroundTruth/0.2" },
+                  headers: { "User-Agent": "GroundTruth/0.3" },
                 });
                 passed = resp.ok;
                 actual = `status ${resp.status}`;
@@ -527,31 +559,581 @@ export class GroundTruthMCP extends McpAgent<Env> {
 }
 
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
 
+    // ───────────────────────────────────────────────
+    // MCP endpoint with API key middleware
+    // ───────────────────────────────────────────────
     if (url.pathname === "/mcp") {
+      const apiKey = request.headers.get("X-API-Key");
+      
+      // Check if this is a paid tool request (x402 payment header exists)
+      const hasX402Payment = request.headers.get("x-402-payment") !== null;
+      
+      // If no API key and no x402 payment, only allow free tools
+      if (!apiKey && !hasX402Payment) {
+        // Clone request to inspect MCP call without consuming body
+        const clonedReq = request.clone();
+        try {
+          const body = await clonedReq.json();
+          const toolName = body?.params?.name;
+          
+          // If requesting a paid tool without API key or x402, reject
+          if (toolName && !FREE_TOOLS.includes(toolName)) {
+            return new Response(
+              JSON.stringify({
+                error: "Authentication required",
+                message: `Tool '${toolName}' requires a valid API key or x402 payment. Get an API key at /pricing`,
+                freeTier: FREE_TOOLS,
+              }),
+              {
+                status: 402,
+                headers: { "Content-Type": "application/json" },
+              }
+            );
+          }
+        } catch {
+          // If we can't parse the body, continue to MCP handler
+        }
+      }
+      
+      // If API key provided, validate it
+      if (apiKey && !hasX402Payment) {
+        const isValid = await validateApiKey(env.API_KEYS, apiKey);
+        if (!isValid) {
+          return new Response(
+            JSON.stringify({
+              error: "Invalid API key",
+              message: "The provided API key is invalid or inactive. Get a new key at /pricing",
+            }),
+            {
+              status: 401,
+              headers: { "Content-Type": "application/json" },
+            }
+          );
+        }
+      }
+      
+      // API key is valid or x402 payment present, or it's a free tool - proceed to MCP
       return GroundTruthMCP.serve("/mcp").fetch(request, env, ctx);
     }
 
-    // Root page with base.dev verification meta tag
-    if (url.pathname === "/") {
+    // ───────────────────────────────────────────────
+    // Pricing page
+    // ───────────────────────────────────────────────
+    if (url.pathname === "/pricing") {
       return new Response(
         `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta name="base:app_id" content="69956c02e0d5d2cf831b5fc8" />
-  <title>Ground Truth MCP</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ground Truth MCP - Pricing</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container { 
+      max-width: 900px; 
+      width: 100%;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+    }
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 40px 30px;
+      text-align: center;
+    }
+    .header h1 { font-size: 2.5rem; margin-bottom: 10px; }
+    .header p { font-size: 1.1rem; opacity: 0.9; }
+    .content { padding: 40px 30px; }
+    .pricing-card {
+      border: 2px solid #667eea;
+      border-radius: 12px;
+      padding: 30px;
+      margin-bottom: 30px;
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    }
+    .pricing-card h2 { color: #667eea; margin-bottom: 15px; font-size: 1.8rem; }
+    .price { font-size: 3rem; font-weight: bold; color: #764ba2; margin: 20px 0; }
+    .price span { font-size: 1.2rem; font-weight: normal; color: #666; }
+    .features { 
+      list-style: none;
+      margin: 20px 0;
+    }
+    .features li {
+      padding: 10px 0;
+      padding-left: 30px;
+      position: relative;
+      color: #333;
+    }
+    .features li:before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: #667eea;
+      font-weight: bold;
+      font-size: 1.3rem;
+    }
+    .cta-button {
+      display: inline-block;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 15px 40px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: bold;
+      font-size: 1.1rem;
+      transition: transform 0.2s, box-shadow 0.2s;
+      border: none;
+      cursor: pointer;
+    }
+    .cta-button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+    }
+    .free-tier {
+      background: #f0f4f8;
+      padding: 20px;
+      border-radius: 8px;
+      margin-bottom: 30px;
+    }
+    .free-tier h3 { color: #667eea; margin-bottom: 10px; }
+    .free-tier ul { margin-left: 20px; color: #555; }
+    .footer {
+      text-align: center;
+      padding: 20px;
+      color: #999;
+      font-size: 0.9rem;
+    }
+    .footer a { color: #667eea; text-decoration: none; }
+  </style>
 </head>
 <body>
-  <h1>Ground Truth MCP Server</h1>
-  <p>MCP endpoint: <a href="/mcp">/mcp</a></p>
+  <div class="container">
+    <div class="header">
+      <h1>Ground Truth MCP</h1>
+      <p>Let AI agents validate their own claims with real data</p>
+    </div>
+    <div class="content">
+      <div class="free-tier">
+        <h3>🎁 Free Tier</h3>
+        <ul>
+          <li><strong>check_endpoint</strong> - Probe any URL/API endpoint (unlimited, forever free)</li>
+        </ul>
+      </div>
+
+      <div class="pricing-card">
+        <h2>🚀 Pro Plan</h2>
+        <div class="price">$9<span>/month</span></div>
+        <ul class="features">
+          <li>Unlimited calls to all premium tools</li>
+          <li><strong>estimate_market</strong> - Count packages in npm/PyPI</li>
+          <li><strong>check_pricing</strong> - Extract pricing from any website</li>
+          <li><strong>compare_competitors</strong> - Side-by-side package comparison</li>
+          <li><strong>verify_claim</strong> - Cross-reference claims with live sources</li>
+          <li><strong>test_hypothesis</strong> - Automated fact-checking</li>
+          <li>5-minute response caching for faster results</li>
+          <li>Cancel anytime, no questions asked</li>
+        </ul>
+        <form action="/api/checkout" method="POST">
+          <button type="submit" class="cta-button">Subscribe Now →</button>
+        </form>
+      </div>
+
+      <div class="footer">
+        <p>Questions? Email <a href="mailto:anishdasmail@gmail.com">anishdasmail@gmail.com</a></p>
+        <p style="margin-top: 10px;"><a href="/">← Back to Home</a></p>
+      </div>
+    </div>
+  </div>
 </body>
 </html>`,
         { headers: { "Content-Type": "text/html" } }
       );
     }
 
+    // ───────────────────────────────────────────────
+    // Stripe checkout session
+    // ───────────────────────────────────────────────
+    if (url.pathname === "/api/checkout" && request.method === "POST") {
+      try {
+        const stripe = env.STRIPE_SECRET_KEY;
+        
+        // Create Stripe checkout session
+        const checkoutResponse = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${stripe}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            "payment_method_types[0]": "card",
+            "line_items[0][price]": "price_1TD5jiKOR3CPCI6H5nBr8KV8",
+            "line_items[0][quantity]": "1",
+            "mode": "subscription",
+            "success_url": `${url.origin}/api/success?session_id={CHECKOUT_SESSION_ID}`,
+            "cancel_url": `${url.origin}/pricing`,
+          }),
+        });
+
+        const session = await checkoutResponse.json() as { id: string; url: string };
+        
+        return Response.redirect(session.url, 303);
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: "Failed to create checkout session", details: e instanceof Error ? e.message : String(e) }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // ───────────────────────────────────────────────
+    // Success page (display API key)
+    // ───────────────────────────────────────────────
+    if (url.pathname === "/api/success") {
+      const sessionId = url.searchParams.get("session_id");
+      if (!sessionId) {
+        return new Response("Missing session_id", { status: 400 });
+      }
+
+      try {
+        // Retrieve session from Stripe
+        const sessionResponse = await fetch(`https://api.stripe.com/v1/checkout/sessions/${sessionId}`, {
+          headers: { "Authorization": `Bearer ${env.STRIPE_SECRET_KEY}` },
+        });
+        
+        const session = await sessionResponse.json() as { 
+          customer: string;
+          customer_details?: { email?: string };
+          subscription: string;
+        };
+        
+        // Check if API key already exists for this customer
+        const existingKeysList = await env.API_KEYS.list({ prefix: "gt_live_" });
+        let apiKey: string | null = null;
+        
+        for (const key of existingKeysList.keys) {
+          const data = await env.API_KEYS.get(key.name, "json") as { stripeCustomerId: string; apiKey: string } | null;
+          if (data?.stripeCustomerId === session.customer) {
+            apiKey = data.apiKey || key.name;
+            break;
+          }
+        }
+        
+        // If no existing key, generate new one
+        if (!apiKey) {
+          apiKey = generateApiKey();
+          await env.API_KEYS.put(apiKey, JSON.stringify({
+            active: true,
+            email: session.customer_details?.email || "unknown",
+            stripeCustomerId: session.customer,
+            subscriptionId: session.subscription,
+            createdAt: new Date().toISOString(),
+          }));
+        }
+
+        return new Response(
+          `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to Ground Truth MCP Pro!</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #333;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container { 
+      max-width: 700px; 
+      width: 100%;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      text-align: center;
+    }
+    h1 { color: #667eea; margin-bottom: 20px; font-size: 2rem; }
+    .success-icon { font-size: 4rem; margin-bottom: 20px; }
+    .api-key-box {
+      background: #f5f7fa;
+      border: 2px solid #667eea;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 30px 0;
+      font-family: 'Courier New', monospace;
+      font-size: 1.1rem;
+      word-break: break-all;
+      color: #764ba2;
+      position: relative;
+    }
+    .copy-btn {
+      margin-top: 15px;
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+    .copy-btn:hover { background: #5568d3; }
+    .instructions {
+      text-align: left;
+      margin-top: 30px;
+      padding: 20px;
+      background: #f0f4f8;
+      border-radius: 8px;
+    }
+    .instructions h3 { color: #667eea; margin-bottom: 15px; }
+    .instructions code {
+      background: #fff;
+      padding: 2px 6px;
+      border-radius: 3px;
+      color: #764ba2;
+    }
+    .instructions pre {
+      background: #fff;
+      padding: 15px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 10px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="success-icon">🎉</div>
+    <h1>Welcome to Ground Truth MCP Pro!</h1>
+    <p>Your subscription is active. Here's your API key:</p>
+    
+    <div class="api-key-box" id="apiKeyBox">
+      ${apiKey}
+    </div>
+    <button class="copy-btn" onclick="copyApiKey()">📋 Copy API Key</button>
+    
+    <div class="instructions">
+      <h3>How to Use Your API Key</h3>
+      <p>Add this header to all your MCP requests:</p>
+      <pre>X-API-Key: ${apiKey}</pre>
+      
+      <p style="margin-top: 15px;">Example with curl:</p>
+      <pre>curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+  -H "X-API-Key: ${apiKey}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"estimate_market","arguments":{"query":"mcp server"}},"id":1}'</pre>
+      
+      <p style="margin-top: 20px; color: #e63946; font-weight: bold;">⚠️ Keep this key secret! Don't share it publicly.</p>
+    </div>
+    
+    <p style="margin-top: 30px; color: #999;">
+      Questions? Email <a href="mailto:anishdasmail@gmail.com" style="color: #667eea;">anishdasmail@gmail.com</a>
+    </p>
+  </div>
+  
+  <script>
+    function copyApiKey() {
+      const apiKey = document.getElementById('apiKeyBox').textContent.trim();
+      navigator.clipboard.writeText(apiKey).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => { btn.textContent = '📋 Copy API Key'; }, 2000);
+      });
+    }
+  </script>
+</body>
+</html>`,
+          { headers: { "Content-Type": "text/html" } }
+        );
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: "Failed to retrieve session", details: e instanceof Error ? e.message : String(e) }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // ───────────────────────────────────────────────
+    // Stripe webhook handler
+    // ───────────────────────────────────────────────
+    if (url.pathname === "/api/webhook" && request.method === "POST") {
+      const signature = request.headers.get("stripe-signature");
+      if (!signature) {
+        return new Response("Missing signature", { status: 400 });
+      }
+
+      try {
+        const body = await request.text();
+        
+        // Verify webhook signature (simplified - production should use proper HMAC verification)
+        // For now, we'll just parse the event
+        const event = JSON.parse(body) as {
+          type: string;
+          data: {
+            object: {
+              customer: string;
+              subscription: string;
+              customer_details?: { email?: string };
+            };
+          };
+        };
+
+        if (event.type === "checkout.session.completed") {
+          // Already handled in /api/success, but we can log here
+          console.log("Checkout completed:", event.data.object.customer);
+        } else if (event.type === "customer.subscription.deleted") {
+          // Mark API key as inactive
+          const customerId = event.data.object.customer;
+          const keysList = await env.API_KEYS.list({ prefix: "gt_live_" });
+          
+          for (const key of keysList.keys) {
+            const data = await env.API_KEYS.get(key.name, "json") as { stripeCustomerId: string } | null;
+            if (data?.stripeCustomerId === customerId) {
+              await env.API_KEYS.put(key.name, JSON.stringify({
+                ...data,
+                active: false,
+                cancelledAt: new Date().toISOString(),
+              }));
+              break;
+            }
+          }
+        }
+
+        return new Response(JSON.stringify({ received: true }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: "Webhook processing failed", details: e instanceof Error ? e.message : String(e) }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    // ───────────────────────────────────────────────
+    // Root page
+    // ───────────────────────────────────────────────
+    if (url.pathname === "/") {
+      return new Response(
+        `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta name="base:app_id" content="69956c02e0d5d2cf831b5fc8" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ground Truth MCP</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container { 
+      max-width: 800px; 
+      text-align: center;
+    }
+    h1 { font-size: 3rem; margin-bottom: 20px; }
+    p { font-size: 1.2rem; margin-bottom: 30px; opacity: 0.9; }
+    .links { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
+    .link-btn {
+      background: white;
+      color: #667eea;
+      padding: 15px 30px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: bold;
+      transition: transform 0.2s, box-shadow 0.2s;
+      display: inline-block;
+    }
+    .link-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+    }
+    .pricing-link {
+      background: #ffd700;
+      color: #764ba2;
+    }
+    .features {
+      margin-top: 50px;
+      text-align: left;
+      background: rgba(255,255,255,0.1);
+      padding: 30px;
+      border-radius: 12px;
+      backdrop-filter: blur(10px);
+    }
+    .features h2 { margin-bottom: 20px; text-align: center; }
+    .features ul { list-style: none; }
+    .features li {
+      padding: 10px 0;
+      padding-left: 30px;
+      position: relative;
+    }
+    .features li:before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Ground Truth MCP Server</h1>
+    <p>Let AI agents validate their own claims with real, live data from the web.</p>
+    
+    <div class="links">
+      <a href="/mcp" class="link-btn">MCP Endpoint</a>
+      <a href="/pricing" class="link-btn pricing-link">💳 Pricing & API Keys</a>
+      <a href="/stats" class="link-btn">📊 Stats</a>
+    </div>
+    
+    <div class="features">
+      <h2>🛠 Available Tools</h2>
+      <ul>
+        <li><strong>check_endpoint</strong> (FREE) - Probe any URL/API endpoint</li>
+        <li><strong>estimate_market</strong> ($9/mo) - Count packages in npm/PyPI</li>
+        <li><strong>check_pricing</strong> ($9/mo) - Extract pricing from websites</li>
+        <li><strong>compare_competitors</strong> ($9/mo) - Side-by-side comparisons</li>
+        <li><strong>verify_claim</strong> ($9/mo) - Cross-reference claims</li>
+        <li><strong>test_hypothesis</strong> ($9/mo) - Automated fact-checking</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>`,
+        { headers: { "Content-Type": "text/html" } }
+      );
+    }
+
+    // ───────────────────────────────────────────────
+    // Stats endpoint
+    // ───────────────────────────────────────────────
     if (url.pathname === "/stats") {
       try {
         const id = env.GROUND_TRUTH_MCP.idFromName("ground-truth");

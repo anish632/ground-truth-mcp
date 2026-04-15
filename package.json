@@ -1,6 +1,6 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"mcpName": "io.github.anish632/ground-truth",
 	"description": "MCP server that lets AI agents validate their own claims by checking real endpoints, counting market competitors, and testing hypotheses against live data.",
 	"keywords": [

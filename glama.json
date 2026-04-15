@@ -1,12 +1,12 @@
 {
   "name": "ground-truth-mcp",
-  "description": "MCP server that lets AI agents validate their own claims by checking real endpoints, counting market competitors, and testing hypotheses against live data.",
+  "description": "MCP server that lets AI agents validate their own claims by checking real endpoints, counting market competitors, and testing hypotheses against live data. Free tier available (check_endpoint, no signup). Also available as a zero-deployment Claude Code skill (/ground-truth).",
   "author": "anish632",
   "repository": "https://github.com/anish632/ground-truth-mcp",
   "license": "MIT",
   "runtime": "cloudflare-workers",
   "transport": "streamable-http",
-  "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
+  "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
   "tools": [
     {
       "name": "check_endpoint",

@@ -24,7 +24,7 @@ import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
 
 // --- Config ---
 const SERVER_URL =
-  process.argv[2] || "https://ground-truth-mcp.anishdasmail.workers.dev/mcp";
+  process.argv[2] || "https://ground-truth-mcp.anish632.workers.dev/mcp";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 
 if (!PRIVATE_KEY) {
