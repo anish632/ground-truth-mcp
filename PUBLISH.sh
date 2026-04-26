@@ -1,10 +1,10 @@
 #!/bin/bash
-# Ground Truth MCP - npm Publication Script
+# Ground Truth - npm Publication Script
 # Run this after completing npm browser login
 
 set -e
 
-echo "🚀 Ground Truth MCP Publication Script"
+echo "🚀 Ground Truth Publication Script"
 echo "======================================"
 echo ""
 
@@ -24,7 +24,7 @@ echo ""
 echo "2️⃣  Checking if package already exists on npm..."
 if npm view ground-truth-mcp > /dev/null 2>&1; then
   echo "⚠️  Package 'ground-truth-mcp' already exists on npm!"
-  echo "   You may need to bump the version in package.json"
+  echo "   Bump the version in package.json before publishing again"
   exit 1
 else
   echo "✅ Package name is available"
@@ -45,13 +45,15 @@ echo ""
 echo "✅ Successfully published to npm!"
 echo ""
 echo "📦 Next steps:"
+echo "   1. Confirm npm metadata still matches the current Ground Truth positioning"
+echo "   2. Review README, server.json, and glama.json on the published package"
+echo ""
+echo "   MCP registry:"
 echo "   1. Install mcp-publisher: brew install mcp-publisher"
-echo "   2. Login to MCP Registry: mcp-publisher login github"
-echo "   3. Publish to registry: mcp-publisher publish"
+echo "   2. Login: mcp-publisher login github"
+echo "   3. Publish: mcp-publisher publish"
 echo ""
 echo "   Optional - Smithery.ai:"
 echo "   1. Install CLI: npm install -g @smithery/cli"
 echo "   2. Login: smithery auth login"
-echo "   3. Publish: smithery mcp publish https://ground-truth-mcp.anish632.workers.dev/mcp -n anish632/ground-truth"
-echo ""
-echo "📄 Full report: /Users/anishdas/.openclaw/workspace-second/reports/ground-truth-publish.md"
+echo "   3. Publish: smithery mcp publish https://ground-truth-mcp.anishdasmail.workers.dev/mcp -n anish632/ground-truth"

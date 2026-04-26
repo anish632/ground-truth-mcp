@@ -20,7 +20,7 @@ Current Stripe resources:
 - Price ID: `price_1TD5jiKOR3CPCI6H5nBr8KV8`
 - Webhook ID: `we_1TD5jiKOR3CPCI6HatiUuysC`
 - Webhook secret: `whsec_Q3eNylg2aOnkZkMWLv15Xvq5uDDHhYoz`
-- Webhook URL: `https://ground-truth-mcp.anish632.workers.dev/api/webhook`
+- Webhook URL: `https://ground-truth-mcp.anishdasmail.workers.dev/api/webhook`
 
 ---
 
@@ -107,13 +107,13 @@ npx wrangler deploy
 
 Production base URL:
 
-`https://ground-truth-mcp.anish632.workers.dev`
+`https://ground-truth-mcp.anishdasmail.workers.dev`
 
 ---
 
 ### 5. Verify checkout and API key flow
 
-1. Visit `https://ground-truth-mcp.anish632.workers.dev/pricing`
+1. Visit `https://ground-truth-mcp.anishdasmail.workers.dev/pricing`
 2. Start checkout
 3. Complete payment with a Stripe test card such as `4242 4242 4242 4242`
 4. Confirm `/api/success` displays an API key
@@ -122,12 +122,12 @@ Production base URL:
 Example:
 
 ```bash
-MCP_SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+MCP_SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ground-truth-setup","version":"1.0.0"}},"id":0}' | tr -d '\r' | awk '/^mcp-session-id:/ {print $2}')"
 
-curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $MCP_SESSION_ID" \

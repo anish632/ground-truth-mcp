@@ -48,7 +48,7 @@ Unlocks the full verification layer for agents that need broader coverage.
 - Structured reports
 - Priority response
 
-To use Pro, subscribe at [ground-truth-mcp.anish632.workers.dev/pricing](https://ground-truth-mcp.anish632.workers.dev/pricing) and send your key in `X-API-Key`.
+To use Pro, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing) and send your key in `X-API-Key`.
 
 ---
 
@@ -59,7 +59,7 @@ To use Pro, subscribe at [ground-truth-mcp.anish632.workers.dev/pricing](https:/
 Verify a pricing claim:
 
 ```bash
-SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -d '{
@@ -76,7 +76,7 @@ SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/m
     "id": 0
   }' | tr -d '\r' | awk '/^mcp-session-id:/ {print $2}')"
 
-curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
@@ -99,7 +99,7 @@ curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
 Compare package popularity:
 
 ```javascript
-const initResponse = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+const initResponse = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/mcp", {
   method: "POST",
   headers: {
     "Accept": "application/json, text/event-stream",
@@ -126,7 +126,7 @@ if (!sessionId) {
   throw new Error("Missing mcp-session-id from initialize response");
 }
 
-const response = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+const response = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/mcp", {
   method: "POST",
   headers: {
     "Accept": "application/json, text/event-stream",
@@ -157,7 +157,7 @@ console.log(result);
 Validate an API endpoint with no API key:
 
 ```bash
-curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
@@ -206,7 +206,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
       "headers": {
         "X-API-Key": "gt_live_your_key_here"
       }
@@ -223,7 +223,7 @@ Add to `.cursor/mcp.json` or `~/.cursor/mcp.json`:
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
       "headers": {
         "X-API-Key": "gt_live_your_key_here"
       }

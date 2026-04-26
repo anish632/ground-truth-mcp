@@ -1407,12 +1407,12 @@ export default {
       <p style="margin-top: 15px;">Default monthly quota: 5,000 tool requests.</p>
       
       <p style="margin-top: 15px;">Example with curl:</p>
-      <pre>SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+      <pre>SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   -H "Accept: application/json, text/event-stream" \\
   -H "Content-Type: application/json" \\
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ground-truth-success","version":"1.0.0"}},"id":0}' | tr -d '\\r' | awk '/^mcp-session-id:/ {print $2}')"
 
-curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   -H "Accept: application/json, text/event-stream" \\
   -H "Mcp-Session-Id: $SESSION_ID" \\
   -H "X-API-Key: ${apiKey}" \\
@@ -1934,12 +1934,12 @@ curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
         <div class="code-card">
           <h3>Direct API <code>curl</code> call</h3>
           <p>Initialize the MCP session, then verify a pricing claim against a live pricing page.</p>
-          <div class="code-block">SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+          <div class="code-block">SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   -H "Accept: application/json, text/event-stream" \\
   -H "Content-Type: application/json" \\
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ground-truth-example","version":"1.0.0"}},"id":0}' | tr -d '\\r' | awk '/^mcp-session-id:/ {print $2}')"
 
-curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   -H "Accept: application/json, text/event-stream" \\
   -H "Content-Type: application/json" \\
   -H "Mcp-Session-Id: $SESSION_ID" \\
@@ -1959,7 +1959,7 @@ curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
         <div class="code-card">
           <h3>JavaScript <code>fetch</code> example</h3>
           <p>Compare package popularity from code.</p>
-          <div class="code-block">const initResponse = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+          <div class="code-block">const initResponse = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/mcp", {
   method: "POST",
   headers: {
     "Accept": "application/json, text/event-stream",
@@ -1986,7 +1986,7 @@ if (!sessionId) {
   throw new Error("Missing mcp-session-id from initialize response");
 }
 
-const response = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+const response = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/mcp", {
   method: "POST",
   headers: {
     "Accept": "application/json, text/event-stream",
@@ -2024,7 +2024,7 @@ console.log(result);</div>
           <pre>{
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
       "headers": {
         "X-API-Key": "gt_live_your_key_here"
       }
@@ -2038,7 +2038,7 @@ console.log(result);</div>
           <pre>{
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
       "headers": {
         "X-API-Key": "gt_live_your_key_here"
       }

@@ -97,7 +97,7 @@ Current resources used by the project:
 - Price ID: `price_1TD5jiKOR3CPCI6H5nBr8KV8`
 - Webhook ID: `we_1TD5jiKOR3CPCI6HatiUuysC`
 - Webhook secret: `whsec_Q3eNylg2aOnkZkMWLv15Xvq5uDDHhYoz`
-- Webhook URL: `https://ground-truth-mcp.anish632.workers.dev/api/webhook`
+- Webhook URL: `https://ground-truth-mcp.anishdasmail.workers.dev/api/webhook`
 
 Note: some older Stripe dashboard resources may still carry the previous `Ground Truth MCP` label. Operationally that is fine, but rename them if you want naming consistency in Stripe.
 

@@ -131,7 +131,7 @@ In Stripe, confirm delivery for:
 - Price ID: `price_1TD5jiKOR3CPCI6H5nBr8KV8`
 - Webhook ID: `we_1TD5jiKOR3CPCI6HatiUuysC`
 - Webhook secret: `whsec_Q3eNylg2aOnkZkMWLv15Xvq5uDDHhYoz`
-- Production URL: `https://ground-truth-mcp.anish632.workers.dev`
+- Production URL: `https://ground-truth-mcp.anishdasmail.workers.dev`
 
 ---
 

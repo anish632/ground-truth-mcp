@@ -7,7 +7,7 @@ Ground Truth lets AI agents verify claims, check live data, compare competitors,
 [![MCP](https://img.shields.io/badge/MCP-1.11.0-blue)](https://modelcontextprotocol.io)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
 
-**Live:** https://ground-truth-mcp.anish632.workers.dev
+**Live:** https://ground-truth-mcp.anishdasmail.workers.dev
 
 ---
 
@@ -103,7 +103,7 @@ Built for agents that need higher limits and broader verification coverage.
 - Structured reports
 - Priority response
 
-[View pricing](https://ground-truth-mcp.anish632.workers.dev/pricing)
+[View pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing)
 
 ---
 
@@ -114,7 +114,7 @@ Built for agents that need higher limits and broader verification coverage.
 Direct HTTP calls to `/mcp` are session-based. Initialize once, keep the returned `mcp-session-id`, then call tools with that header.
 
 ```bash
-SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -d '{
@@ -131,7 +131,7 @@ SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/m
     "id": 0
   }' | tr -d '\r' | awk '/^mcp-session-id:/ {print $2}')"
 
-curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
@@ -152,7 +152,7 @@ curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
 ### JavaScript `fetch`
 
 ```javascript
-const initResponse = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+const initResponse = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/mcp", {
   method: "POST",
   headers: {
     "Accept": "application/json, text/event-stream",
@@ -179,7 +179,7 @@ if (!sessionId) {
   throw new Error("Missing mcp-session-id from initialize response");
 }
 
-const response = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+const response = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/mcp", {
   method: "POST",
   headers: {
     "Accept": "application/json, text/event-stream",
@@ -208,7 +208,7 @@ console.log(result);
 ### Free endpoint check
 
 ```bash
-curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
@@ -243,7 +243,7 @@ Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
       "headers": {
         "X-API-Key": "gt_live_your_key_here"
       }
@@ -260,7 +260,7 @@ Add this to `.cursor/mcp.json` in your project or `~/.cursor/mcp.json` globally:
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
       "headers": {
         "X-API-Key": "gt_live_your_key_here"
       }

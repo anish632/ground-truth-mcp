@@ -1,8 +1,19 @@
 #!/usr/bin/env node
 /**
- * x402 Payment End-to-End Test
+ * Legacy x402 Payment End-to-End Test
  *
- * Tests the full payment loop against the Ground Truth MCP server:
+ * This script preserves the older x402 payment flow test.
+ *
+ * Ground Truth now enforces Pro access at the /mcp gateway with API keys and
+ * billing status checks before paid tool execution. That means this script is
+ * no longer the primary access test for the current product behavior.
+ *
+ * Use `test-usage-enforcement.sh` for the current Free vs Pro enforcement flow.
+ *
+ * If you still want to exercise the older x402 path against a gateway that
+ * allows it, set ALLOW_LEGACY_X402_TEST=true before running this script.
+ *
+ * Legacy flow:
  *   1. Initialize MCP session (get session ID)
  *   2. List tools (verify free + paid annotations)
  *   3. Call free tool (check_endpoint)
@@ -24,8 +35,17 @@ import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
 
 // --- Config ---
 const SERVER_URL =
-  process.argv[2] || "https://ground-truth-mcp.anish632.workers.dev/mcp";
+  process.argv[2] || "https://ground-truth-mcp.anishdasmail.workers.dev/mcp";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
+const ALLOW_LEGACY_X402_TEST = process.env.ALLOW_LEGACY_X402_TEST === "true";
+
+if (!ALLOW_LEGACY_X402_TEST) {
+  console.log("Legacy x402 test is disabled by default.");
+  console.log("Ground Truth now requires API-key-based Pro access at the /mcp gateway.");
+  console.log("Use ./test-usage-enforcement.sh for current billing and quota checks.");
+  console.log("Set ALLOW_LEGACY_X402_TEST=true to run the legacy x402 flow.");
+  process.exit(0);
+}
 
 if (!PRIVATE_KEY) {
   console.error("Error: Set PRIVATE_KEY env var (e.g. PRIVATE_KEY=0xabc...)");
@@ -279,7 +299,7 @@ async function testPaidTool() {
 
 // --- Run ---
 async function main() {
-  console.log("=== Ground Truth MCP — x402 Payment E2E Test ===\n");
+  console.log("=== Ground Truth — x402 Payment E2E Test ===\n");
 
   const initOk = await testInitialize();
   if (!initOk) {
