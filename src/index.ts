@@ -4,8 +4,14 @@ import { withX402, type X402Config } from "agents/x402";
 import { z } from "zod";
 
 // --- Environment bindings ---
-interface Env {
-  GROUND_TRUTH_MCP: DurableObjectNamespace;
+type WorkerProcess = {
+  env?: Record<string, string | undefined>;
+  platform?: string;
+};
+
+const workerProcess = (globalThis as typeof globalThis & { process?: WorkerProcess }).process;
+
+interface Env extends Cloudflare.Env {
   API_KEYS: KVNamespace;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
@@ -13,14 +19,379 @@ interface Env {
 
 // --- Cache types ---
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_CACHEABLE_BODY_BYTES = 512 * 1024;
 
 // --- Remote Telemetry Config ---
-const TELEMETRY_ENABLED = process.env.GROUND_TRUTH_TELEMETRY !== "false";
+const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
 const NEON_DB_URL = "postgresql://neondb_owner:npg_Eekbuc84GiTW@ep-fragrant-dawn-ai5pgip6-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require";
 const SERVER_VERSION = "0.3.0";
 
 // --- Free tier tools ---
 const FREE_TOOLS = ["check_endpoint"];
+const FREE_MONTHLY_LIMIT = 100;
+const PRO_MONTHLY_LIMIT = 5000;
+
+type ApiKeyRecord = Record<string, unknown> & {
+  active?: boolean;
+  billingActive?: boolean;
+  subscriptionStatus?: string;
+  monthlyQuota?: number;
+  email?: string;
+  stripeCustomerId?: string;
+  subscriptionId?: string;
+  createdAt?: string;
+  cancelledAt?: string;
+  reactivatedAt?: string;
+};
+
+interface UsageRecord {
+  month: string;
+  subjectType: "free" | "pro";
+  subjectId: string;
+  total: number;
+  byTool: Record<string, number>;
+  updatedAt: string;
+}
+
+interface UsageLimitResult {
+  allowed: boolean;
+  used: number;
+  limit: number;
+  remaining: number;
+  record: UsageRecord | null;
+}
+
+interface ProAccessContext {
+  apiKey: string;
+  apiKeyRecord: ApiKeyRecord;
+  limit: number;
+  month: string;
+  subjectId: string;
+  usageKey: string;
+}
+
+interface McpToolCallBody {
+  id?: number | string | null;
+  method?: string;
+  params?: {
+    name?: string;
+  };
+}
+
+function getCurrentUsageMonth(now = new Date()): string {
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function withJsonHeaders(init: ResponseInit = {}): ResponseInit {
+  const headers = new Headers(init.headers);
+  headers.set("Content-Type", "application/json");
+  headers.set("Cache-Control", "no-store");
+  return { ...init, headers };
+}
+
+function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(body), withJsonHeaders(init));
+}
+
+function getJsonRpcErrorCode(status: number): number {
+  switch (status) {
+    case 401:
+      return -32001;
+    case 402:
+      return -32002;
+    case 429:
+      return -32029;
+    default:
+      return -32000;
+  }
+}
+
+function normalizeJsonRpcId(value: unknown): number | string | null {
+  if (typeof value === "number" || typeof value === "string") {
+    return value;
+  }
+  return null;
+}
+
+function jsonError(
+  status: number,
+  error: string,
+  message: string,
+  details: Record<string, unknown> = {},
+  requestId?: number | string | null,
+): Response {
+  const hasRequestId = requestId !== undefined;
+  const normalizedRequestId = normalizeJsonRpcId(requestId);
+  return jsonResponse(
+    hasRequestId
+      ? {
+          jsonrpc: "2.0",
+          error: {
+            code: getJsonRpcErrorCode(status),
+            message,
+            data: {
+              error,
+              status,
+              ...details,
+            },
+          },
+          id: normalizedRequestId,
+        }
+      : {
+          error,
+          message,
+          status,
+          ...details,
+        },
+    { status },
+  );
+}
+
+function normalizeApiKeyRecord(data: unknown): ApiKeyRecord | null {
+  if (!data || typeof data !== "object") return null;
+  return data as ApiKeyRecord;
+}
+
+function isStripeSubscriptionActive(status?: string): boolean {
+  return status === "active" || status === "trialing";
+}
+
+function isBillingActive(record: ApiKeyRecord): boolean {
+  if (typeof record.subscriptionStatus === "string") {
+    return isStripeSubscriptionActive(record.subscriptionStatus);
+  }
+  if (typeof record.billingActive === "boolean") {
+    return record.billingActive;
+  }
+  return record.active === true;
+}
+
+function getProQuota(record: ApiKeyRecord): number {
+  return typeof record.monthlyQuota === "number" ? record.monthlyQuota : PRO_MONTHLY_LIMIT;
+}
+
+function getUsageStorageKey(subjectType: "free" | "pro", month: string, subjectId: string): string {
+  return `usage:${subjectType}:${month}:${subjectId}`;
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function isLoopbackIp(value: string): boolean {
+  return value === "127.0.0.1" ||
+    value === "::1" ||
+    value === "::ffff:127.0.0.1";
+}
+
+function isLocalRequest(request: Request, ip?: string): boolean {
+  const hostname = new URL(request.url).hostname;
+  return hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    (typeof ip === "string" && isLoopbackIp(ip));
+}
+
+function getAnonymousClientSource(request: Request): { type: string; value: string } {
+  const anonymousClientId = request.headers.get("x-anonymous-client-id")?.trim();
+  const cfConnectingIp = request.headers.get("cf-connecting-ip")?.trim();
+  if (cfConnectingIp && !(anonymousClientId && isLocalRequest(request, cfConnectingIp))) {
+    return { type: "ip", value: cfConnectingIp };
+  }
+
+  const xForwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  if (xForwardedFor && !(anonymousClientId && isLocalRequest(request, xForwardedFor))) {
+    return { type: "ip", value: xForwardedFor };
+  }
+
+  const xRealIp = request.headers.get("x-real-ip")?.trim();
+  if (xRealIp && !(anonymousClientId && isLocalRequest(request, xRealIp))) {
+    return { type: "ip", value: xRealIp };
+  }
+
+  if (anonymousClientId) {
+    return { type: "anonymous_client_id", value: anonymousClientId };
+  }
+
+  return {
+    type: "user_agent",
+    value: request.headers.get("user-agent")?.trim() || "unknown-client",
+  };
+}
+
+async function getApiKeyRecord(kv: KVNamespace, apiKey: string): Promise<ApiKeyRecord | null> {
+  try {
+    const data = await kv.get(apiKey, "json");
+    return normalizeApiKeyRecord(data);
+  } catch {
+    return null;
+  }
+}
+
+async function saveApiKeyRecord(kv: KVNamespace, apiKey: string, record: ApiKeyRecord): Promise<void> {
+  await kv.put(apiKey, JSON.stringify(record));
+}
+
+async function updateCustomerBillingState(
+  kv: KVNamespace,
+  customerId: string,
+  updates: Partial<ApiKeyRecord>,
+): Promise<void> {
+  const keysList = await kv.list({ prefix: "gt_live_" });
+
+  for (const key of keysList.keys) {
+    const data = await getApiKeyRecord(kv, key.name);
+    if (!data || data.stripeCustomerId !== customerId) continue;
+
+    await saveApiKeyRecord(kv, key.name, {
+      ...data,
+      ...updates,
+    });
+  }
+}
+
+async function getUsageRecord(kv: KVNamespace, usageKey: string): Promise<UsageRecord | null> {
+  const data = await kv.get(usageKey, "json");
+  if (!data || typeof data !== "object") return null;
+
+  const record = data as Partial<UsageRecord>;
+  return {
+    month: typeof record.month === "string" ? record.month : getCurrentUsageMonth(),
+    subjectType: record.subjectType === "pro" ? "pro" : "free",
+    subjectId: typeof record.subjectId === "string" ? record.subjectId : usageKey,
+    total: typeof record.total === "number" ? record.total : 0,
+    byTool: typeof record.byTool === "object" && record.byTool !== null
+      ? record.byTool as Record<string, number>
+      : {},
+    updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : new Date().toISOString(),
+  };
+}
+
+async function checkUsageLimit(
+  kv: KVNamespace,
+  usageKey: string,
+  limit: number,
+): Promise<UsageLimitResult> {
+  const record = await getUsageRecord(kv, usageKey);
+  const used = record?.total ?? 0;
+  return {
+    allowed: used < limit,
+    used,
+    limit,
+    remaining: Math.max(limit - used, 0),
+    record,
+  };
+}
+
+async function incrementUsage(
+  kv: KVNamespace,
+  usageKey: string,
+  subjectType: "free" | "pro",
+  subjectId: string,
+  month: string,
+  toolName: string,
+): Promise<UsageRecord> {
+  const record = await getUsageRecord(kv, usageKey);
+  const nextRecord: UsageRecord = {
+    month,
+    subjectType,
+    subjectId,
+    total: (record?.total ?? 0) + 1,
+    byTool: {
+      ...(record?.byTool ?? {}),
+      [toolName]: ((record?.byTool ?? {})[toolName] ?? 0) + 1,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+
+  await kv.put(usageKey, JSON.stringify(nextRecord));
+  return nextRecord;
+}
+
+async function requireProAccess(
+  kv: KVNamespace,
+  request: Request,
+  toolName: string,
+  requestId?: number | string | null,
+): Promise<ProAccessContext | Response> {
+  const apiKey = request.headers.get("X-API-Key")?.trim();
+  if (!apiKey) {
+    return jsonError(
+      401,
+      "missing_api_key",
+      `Tool '${toolName}' requires a Pro API key.`,
+      {
+        tier: "pro",
+        tool: toolName,
+      },
+      requestId,
+    );
+  }
+
+  const apiKeyRecord = await getApiKeyRecord(kv, apiKey);
+  if (!apiKeyRecord) {
+    return jsonError(
+      401,
+      "invalid_api_key",
+      "The provided API key is invalid.",
+      {
+        tier: "pro",
+        tool: toolName,
+      },
+      requestId,
+    );
+  }
+
+  if (!isBillingActive(apiKeyRecord)) {
+    return jsonError(
+      402,
+      "billing_inactive",
+      "Billing is inactive for this API key.",
+      {
+        tier: "pro",
+        tool: toolName,
+        subscriptionStatus: apiKeyRecord.subscriptionStatus ?? "inactive",
+      },
+      requestId,
+    );
+  }
+
+  const month = getCurrentUsageMonth();
+  const subjectId = await sha256Hex(apiKey);
+  const usageKey = getUsageStorageKey("pro", month, subjectId);
+  const limit = getProQuota(apiKeyRecord);
+  const usage = await checkUsageLimit(kv, usageKey, limit);
+
+  if (!usage.allowed) {
+    return jsonError(
+      429,
+      "quota_exceeded",
+      `Pro monthly quota exceeded for ${month}.`,
+      {
+        tier: "pro",
+        tool: toolName,
+        month,
+        limit,
+        used: usage.used,
+        remaining: usage.remaining,
+      },
+      requestId,
+    );
+  }
+
+  return {
+    apiKey,
+    apiKeyRecord,
+    limit,
+    month,
+    subjectId,
+    usageKey,
+  };
+}
 
 // --- API Key helpers ---
 function generateApiKey(): string {
@@ -32,23 +403,12 @@ function generateApiKey(): string {
   return key;
 }
 
-async function validateApiKey(kv: KVNamespace, apiKey: string): Promise<boolean> {
-  try {
-    const data = await kv.get(apiKey, "json");
-    if (!data) return false;
-    const keyData = data as { active: boolean; email: string; stripeCustomerId: string; createdAt: string };
-    return keyData.active === true;
-  } catch {
-    return false;
-  }
-}
-
 // --- Remote telemetry logger ---
 async function logRemoteUsage(tool: string, success: boolean): Promise<void> {
   if (!TELEMETRY_ENABLED) return;
   
   try {
-    const platform = typeof process !== 'undefined' ? process.platform : 'unknown';
+    const platform = workerProcess?.platform ?? "unknown";
     
     // Non-blocking fire-and-forget POST to Neon via HTTP proxy
     // Use a lightweight edge function to insert into Postgres
@@ -86,8 +446,14 @@ function cacheGet(sql: SqlTagFn, key: string): string | null {
 }
 
 function cacheSet(sql: SqlTagFn, key: string, data: string): void {
+  if (data.length > MAX_CACHEABLE_BODY_BYTES) return;
+
   const ts = Date.now();
-  sql`INSERT OR REPLACE INTO cache (key, data, ts) VALUES (${key}, ${data}, ${ts})`;
+  try {
+    sql`INSERT OR REPLACE INTO cache (key, data, ts) VALUES (${key}, ${data}, ${ts})`;
+  } catch {
+    // Cache writes should never take down a verification request.
+  }
 }
 
 // --- Cached fetch wrapper ---
@@ -223,18 +589,16 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     // PAID $0.01: estimate_market (npm + PyPI)
     // ───────────────────────────────────────────────
-    this.server.paidTool(
+    this.server.tool(
       "estimate_market",
       "Count how many packages/servers exist in a space. " +
       "Searches npm or PyPI and returns: total count, " +
       "top results with versions and activity signals. " +
       "Results are cached for 5 minutes.",
-      0.01,
       {
         query: z.string().describe("Search query (e.g. 'mcp memory server')"),
         registry: z.enum(["npm", "pypi"]).default("npm").describe("Which registry to search"),
       },
-      {},
       async ({ query, registry }) => {
         if (registry === "npm") {
           const data = await searchNpm(sql, query);
@@ -282,16 +646,14 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     // PAID $0.02: check_pricing
     // ───────────────────────────────────────────────
-    this.server.paidTool(
+    this.server.tool(
       "check_pricing",
       "Fetch a product or service's pricing page and extract pricing signals. " +
       "Returns detected price points, plan names, and whether free tiers exist. " +
       "Use this to verify pricing claims before presenting them.",
-      0.02,
       {
         url: z.string().url().describe("URL of the pricing page to analyze"),
       },
-      {},
       async ({ url }) => {
         try {
           const { body, fromCache } = await cachedFetch(sql, url);
@@ -332,18 +694,16 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     // PAID $0.03: compare_competitors
     // ───────────────────────────────────────────────
-    this.server.paidTool(
+    this.server.tool(
       "compare_competitors",
       "Compare two or more npm/PyPI packages side-by-side. " +
       "Returns version, description, and npm score for each. " +
       "Use this to validate 'X is better than Y' claims.",
-      0.03,
       {
         packages: z.array(z.string()).min(2).max(10)
           .describe("Package names to compare (e.g. ['express', 'fastify', 'koa'])"),
         registry: z.enum(["npm", "pypi"]).default("npm"),
       },
-      {},
       async ({ packages, registry }) => {
         const comparisons = [];
         for (const pkg of packages) {
@@ -403,13 +763,12 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     // PAID $0.05: verify_claim
     // ───────────────────────────────────────────────
-    this.server.paidTool(
+    this.server.tool(
       "verify_claim",
       "Cross-reference a factual claim against multiple live sources. " +
       "Provide the claim and a list of URLs to check. Returns whether each " +
       "source supports or contradicts the claim based on substring matching. " +
       "Use this to fact-check before presenting information.",
-      0.05,
       {
         claim: z.string().describe("The factual claim to verify"),
         evidence_urls: z.array(z.string().url()).min(1).max(10)
@@ -417,7 +776,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
         keywords: z.array(z.string()).min(1).max(20)
           .describe("Keywords that should appear if the claim is true"),
       },
-      {},
       async ({ claim, evidence_urls, keywords }) => {
         const sources = [];
         for (const url of evidence_urls) {
@@ -469,13 +827,12 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     // PAID $0.05: test_hypothesis
     // ───────────────────────────────────────────────
-    this.server.paidTool(
+    this.server.tool(
       "test_hypothesis",
       "Test a specific factual claim against live data. " +
       "Give it a hypothesis and a list of tests to run. " +
       "Returns pass/fail for each test and an overall verdict. " +
       "Use this to grade your own research before presenting it.",
-      0.05,
       {
         hypothesis: z.string().describe("The claim to test"),
         tests: z.array(z.object({
@@ -487,7 +844,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
           substring: z.string().optional(),
         })),
       },
-      {},
       async ({ hypothesis, tests }) => {
         const results = [];
         for (const test of tests) {
@@ -563,59 +919,102 @@ export default {
     const url = new URL(request.url);
 
     // ───────────────────────────────────────────────
-    // MCP endpoint with API key middleware
+    // MCP endpoint with billing and usage enforcement
     // ───────────────────────────────────────────────
     if (url.pathname === "/mcp") {
-      const apiKey = request.headers.get("X-API-Key");
-      
-      // Check if this is a paid tool request (x402 payment header exists)
-      const hasX402Payment = request.headers.get("x-402-payment") !== null;
-      
-      // If no API key and no x402 payment, only allow free tools
-      if (!apiKey && !hasX402Payment) {
-        // Clone request to inspect MCP call without consuming body
-        const clonedReq = request.clone();
-        try {
-          const body = await clonedReq.json();
-          const toolName = body?.params?.name;
-          
-          // If requesting a paid tool without API key or x402, reject
-          if (toolName && !FREE_TOOLS.includes(toolName)) {
-            return new Response(
-              JSON.stringify({
-                error: "Authentication required",
-                message: `Tool '${toolName}' requires a valid API key or x402 payment. Get an API key at /pricing`,
-                freeTier: FREE_TOOLS,
-              }),
-              {
-                status: 402,
-                headers: { "Content-Type": "application/json" },
-              }
-            );
-          }
-        } catch {
-          // If we can't parse the body, continue to MCP handler
-        }
+      let body: McpToolCallBody | null = null;
+      try {
+        body = await request.clone().json() as McpToolCallBody;
+      } catch {
+        body = null;
       }
-      
-      // If API key provided, validate it
-      if (apiKey && !hasX402Payment) {
-        const isValid = await validateApiKey(env.API_KEYS, apiKey);
-        if (!isValid) {
-          return new Response(
-            JSON.stringify({
-              error: "Invalid API key",
-              message: "The provided API key is invalid or inactive. Get a new key at /pricing",
-            }),
-            {
-              status: 401,
-              headers: { "Content-Type": "application/json" },
+
+      const method = typeof body?.method === "string" ? body.method : null;
+      const requestId = normalizeJsonRpcId(body?.id);
+      const toolName = method === "tools/call" && typeof body?.params?.name === "string"
+        ? body.params.name
+        : null;
+
+      if (method === "tools/call" && toolName) {
+        if (FREE_TOOLS.includes(toolName)) {
+          const maybeApiKey = request.headers.get("X-API-Key")?.trim();
+          let proUsageApplied = false;
+
+          if (maybeApiKey) {
+            const apiKeyRecord = await getApiKeyRecord(env.API_KEYS, maybeApiKey);
+            if (apiKeyRecord && isBillingActive(apiKeyRecord)) {
+              const month = getCurrentUsageMonth();
+              const subjectId = await sha256Hex(maybeApiKey);
+              const usageKey = getUsageStorageKey("pro", month, subjectId);
+              const limit = getProQuota(apiKeyRecord);
+              const usage = await checkUsageLimit(env.API_KEYS, usageKey, limit);
+
+              if (!usage.allowed) {
+                return jsonError(
+                  429,
+                  "quota_exceeded",
+                  `Pro monthly quota exceeded for ${month}.`,
+                  {
+                    tier: "pro",
+                    tool: toolName,
+                    month,
+                    limit,
+                    used: usage.used,
+                    remaining: usage.remaining,
+                  },
+                  requestId,
+                );
+              }
+
+              await incrementUsage(env.API_KEYS, usageKey, "pro", subjectId, month, toolName);
+              proUsageApplied = true;
             }
+          }
+
+          if (!proUsageApplied) {
+            const freeClient = getAnonymousClientSource(request);
+            const month = getCurrentUsageMonth();
+            const subjectId = await sha256Hex(`${freeClient.type}:${freeClient.value}`);
+            const usageKey = getUsageStorageKey("free", month, subjectId);
+            const usage = await checkUsageLimit(env.API_KEYS, usageKey, FREE_MONTHLY_LIMIT);
+
+            if (!usage.allowed) {
+              return jsonError(
+                429,
+                "quota_exceeded",
+                `Free monthly quota exceeded for ${month}.`,
+                {
+                  tier: "free",
+                  tool: toolName,
+                  month,
+                  limit: FREE_MONTHLY_LIMIT,
+                  used: usage.used,
+                  remaining: usage.remaining,
+                  clientType: freeClient.type,
+                },
+                requestId,
+              );
+            }
+
+            await incrementUsage(env.API_KEYS, usageKey, "free", subjectId, month, toolName);
+          }
+        } else {
+          const proAccess = await requireProAccess(env.API_KEYS, request, toolName, requestId);
+          if (proAccess instanceof Response) {
+            return proAccess;
+          }
+
+          await incrementUsage(
+            env.API_KEYS,
+            proAccess.usageKey,
+            "pro",
+            proAccess.subjectId,
+            proAccess.month,
+            toolName,
           );
         }
       }
-      
-      // API key is valid or x402 payment present, or it's a free tool - proceed to MCP
+
       return GroundTruthMCP.serve("/mcp").fetch(request, env, ctx);
     }
 
@@ -629,134 +1028,194 @@ export default {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ground Truth MCP - Pricing</title>
+  <title>Ground Truth — Pricing</title>
+  <meta name="description" content="Free for quick endpoint checks. Pro for AI agents that need a full verification layer.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { 
+    body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: #333;
+      background:
+        radial-gradient(circle at top, rgba(124, 138, 255, 0.12), transparent 35%),
+        #0a0a0a;
+      color: #e0e0e0;
       min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
+      padding: 60px 24px;
     }
-    .container { 
-      max-width: 900px; 
-      width: 100%;
-      background: white;
-      border-radius: 16px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-      overflow: hidden;
+    a { color: #7c8aff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .page { max-width: 820px; margin: 0 auto; }
+    .eyebrow {
+      display: inline-block;
+      margin: 0 auto 16px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid #2b2b3a;
+      background: rgba(20, 20, 20, 0.85);
+      color: #a9b3ff;
+      font-size: 0.8rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
     }
-    .header {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 40px 30px;
-      text-align: center;
+    .hero { text-align: center; margin-bottom: 48px; }
+    .page h1 { font-size: 2.4rem; color: #fff; margin-bottom: 12px; }
+    .page .sub {
+      max-width: 680px;
+      margin: 0 auto;
+      color: #9898a6;
+      font-size: 1.05rem;
+      line-height: 1.7;
     }
-    .header h1 { font-size: 2.5rem; margin-bottom: 10px; }
-    .header p { font-size: 1.1rem; opacity: 0.9; }
-    .content { padding: 40px 30px; }
-    .pricing-card {
-      border: 2px solid #667eea;
-      border-radius: 12px;
-      padding: 30px;
-      margin-bottom: 30px;
-      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+
+    .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 48px; }
+
+    .plan {
+      background: rgba(20, 20, 20, 0.92);
+      border: 1px solid #242432;
+      border-radius: 18px;
+      padding: 32px 28px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
     }
-    .pricing-card h2 { color: #667eea; margin-bottom: 15px; font-size: 1.8rem; }
-    .price { font-size: 3rem; font-weight: bold; color: #764ba2; margin: 20px 0; }
-    .price span { font-size: 1.2rem; font-weight: normal; color: #666; }
-    .features { 
-      list-style: none;
-      margin: 20px 0;
-    }
-    .features li {
-      padding: 10px 0;
-      padding-left: 30px;
+    .plan-pro { border-color: #7c8aff; }
+
+    .plan h2 { font-size: 1.3rem; color: #fff; margin-bottom: 4px; }
+    .plan .price { font-size: 2.4rem; font-weight: 700; color: #fff; margin: 16px 0; }
+    .plan .price span { font-size: 1rem; font-weight: 400; color: #73738a; }
+    .plan .desc { color: #9c9cb2; font-size: 0.95rem; margin-bottom: 20px; line-height: 1.6; }
+
+    .plan ul { list-style: none; margin-bottom: 24px; }
+    .plan ul li {
+      padding: 8px 0 8px 24px;
       position: relative;
-      color: #333;
+      color: #ccc;
+      font-size: 0.95rem;
     }
-    .features li:before {
-      content: "✓";
+    .plan ul li:before {
+      content: "\\2713";
       position: absolute;
       left: 0;
-      color: #667eea;
-      font-weight: bold;
-      font-size: 1.3rem;
+      color: #4ade80;
+      font-weight: 700;
     }
-    .cta-button {
+
+    .btn {
       display: inline-block;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      padding: 15px 40px;
+      padding: 14px 32px;
       border-radius: 8px;
-      text-decoration: none;
-      font-weight: bold;
-      font-size: 1.1rem;
-      transition: transform 0.2s, box-shadow 0.2s;
+      font-weight: 600;
+      font-size: 1rem;
+      transition: transform 0.15s, box-shadow 0.15s;
       border: none;
       cursor: pointer;
+      text-align: center;
+      width: 100%;
     }
-    .cta-button:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(124,138,255,0.25); text-decoration: none; }
+    .btn-primary { background: #7c8aff; color: #0a0a0a; }
+    .btn-outline { background: transparent; color: #7c8aff; border: 1px solid #333; }
+
+    .note {
+      margin-bottom: 48px;
+      padding: 20px 22px;
+      border-radius: 16px;
+      border: 1px solid #242432;
+      background: rgba(17, 17, 23, 0.92);
+      color: #a8a8bb;
+      line-height: 1.6;
     }
-    .free-tier {
-      background: #f0f4f8;
-      padding: 20px;
-      border-radius: 8px;
-      margin-bottom: 30px;
-    }
-    .free-tier h3 { color: #667eea; margin-bottom: 10px; }
-    .free-tier ul { margin-left: 20px; color: #555; }
+    .note strong { color: #fff; }
+
+    .faq { margin-bottom: 48px; }
+    .faq h2 { font-size: 1.4rem; color: #fff; margin-bottom: 20px; }
+    .faq-item { border-bottom: 1px solid #222; padding: 16px 0; }
+    .faq-item dt { color: #fff; font-weight: 600; margin-bottom: 6px; }
+    .faq-item dd { color: #8f8fa3; font-size: 0.95rem; line-height: 1.6; }
+
     .footer {
       text-align: center;
-      padding: 20px;
-      color: #999;
+      padding-top: 32px;
+      border-top: 1px solid #222;
+      color: #666;
       font-size: 0.9rem;
     }
-    .footer a { color: #667eea; text-decoration: none; }
+
+    @media (max-width: 640px) {
+      .plans { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>Ground Truth MCP</h1>
-      <p>Let AI agents validate their own claims with real data</p>
+  <div class="page">
+    <div class="hero">
+      <div class="eyebrow">Verification Layer For AI Agents</div>
+      <h1>Free for a quick check. Pro for real verification.</h1>
+      <p class="sub">Ground Truth helps AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before they act.</p>
     </div>
-    <div class="content">
-      <div class="free-tier">
-        <h3>🎁 Free Tier</h3>
+
+    <div class="plans">
+      <div class="plan">
+        <h2>Free</h2>
+        <div class="price">$0</div>
+        <p class="desc">Best for basic endpoint checks and limited verification needs.</p>
         <ul>
-          <li><strong>check_endpoint</strong> - Probe any URL/API endpoint (unlimited, forever free)</li>
+          <li>Only <strong>check_endpoint</strong></li>
+          <li>100 requests per calendar month</li>
+          <li>Tracked by Cloudflare client IP in production, or an anonymous client identifier in local/dev</li>
+          <li>No API key required</li>
         </ul>
+        <a href="/mcp" class="btn btn-outline">Try Free Endpoint Check</a>
       </div>
 
-      <div class="pricing-card">
-        <h2>🚀 Pro Plan</h2>
+      <div class="plan plan-pro">
+        <h2>Pro</h2>
         <div class="price">$9<span>/month</span></div>
-        <ul class="features">
-          <li>Unlimited calls to all premium tools</li>
-          <li><strong>estimate_market</strong> - Count packages in npm/PyPI</li>
-          <li><strong>check_pricing</strong> - Extract pricing from any website</li>
-          <li><strong>compare_competitors</strong> - Side-by-side package comparison</li>
-          <li><strong>verify_claim</strong> - Cross-reference claims with live sources</li>
-          <li><strong>test_hypothesis</strong> - Automated fact-checking</li>
-          <li>5-minute response caching for faster results</li>
-          <li>Cancel anytime, no questions asked</li>
+        <p class="desc">For teams that want Ground Truth as an always-on verification layer for their agents.</p>
+        <ul>
+          <li>Requires <strong>X-API-Key</strong></li>
+          <li>Billing must be active</li>
+          <li>5,000 requests per calendar month by default</li>
+          <li>Usage tracked per API key and tool</li>
+          <li>Competitor comparison</li>
+          <li>Claim verification</li>
+          <li>Market checks</li>
+          <li>Structured reports</li>
+          <li>Priority response</li>
         </ul>
         <form action="/api/checkout" method="POST">
-          <button type="submit" class="cta-button">Subscribe Now →</button>
+          <button type="submit" class="btn btn-primary">Subscribe Now</button>
         </form>
       </div>
+    </div>
 
-      <div class="footer">
-        <p>Questions? Email <a href="mailto:anishdasmail@gmail.com">anishdasmail@gmail.com</a></p>
-        <p style="margin-top: 10px;"><a href="/">← Back to Home</a></p>
-      </div>
+    <div class="note">
+      <strong>What Pro unlocks today:</strong> all six verification tools over MCP or direct API. Free currently exposes only the endpoint checker with a 100-request monthly cap.
+    </div>
+
+    <div class="faq">
+      <h2>Questions</h2>
+      <dl>
+        <div class="faq-item">
+          <dt>What is Ground Truth?</dt>
+          <dd>Ground Truth is a verification layer for AI agents. Instead of trusting a model to guess, you give it a way to check live pricing, validate endpoints, compare competitors, and confirm claims before it responds.</dd>
+        </div>
+        <div class="faq-item">
+          <dt>What is MCP?</dt>
+          <dd>Model Context Protocol is the standard that lets AI apps call external tools. Ground Truth plugs into Claude Desktop, Cursor, and other MCP clients so your agent can verify before it acts.</dd>
+        </div>
+        <div class="faq-item">
+          <dt>Do I need an API key for the free check?</dt>
+          <dd>No. <strong>check_endpoint</strong> works immediately with no signup, up to 100 requests per calendar month.</dd>
+        </div>
+        <div class="faq-item">
+          <dt>What happens if I cancel?</dt>
+          <dd>Your Pro API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong>.</dd>
+        </div>
+      </dl>
+    </div>
+
+    <div class="footer">
+      <p>Questions? <a href="mailto:anishdasmail@gmail.com">anishdasmail@gmail.com</a></p>
+      <p style="margin-top: 8px;"><a href="/">&larr; Home</a></p>
     </div>
   </div>
 </body>
@@ -824,11 +1283,13 @@ export default {
         // Check if API key already exists for this customer
         const existingKeysList = await env.API_KEYS.list({ prefix: "gt_live_" });
         let apiKey: string | null = null;
+        let existingKeyRecord: ApiKeyRecord | null = null;
         
         for (const key of existingKeysList.keys) {
-          const data = await env.API_KEYS.get(key.name, "json") as { stripeCustomerId: string; apiKey: string } | null;
+          const data = await getApiKeyRecord(env.API_KEYS, key.name);
           if (data?.stripeCustomerId === session.customer) {
-            apiKey = data.apiKey || key.name;
+            apiKey = key.name;
+            existingKeyRecord = data;
             break;
           }
         }
@@ -836,14 +1297,21 @@ export default {
         // If no existing key, generate new one
         if (!apiKey) {
           apiKey = generateApiKey();
-          await env.API_KEYS.put(apiKey, JSON.stringify({
-            active: true,
-            email: session.customer_details?.email || "unknown",
-            stripeCustomerId: session.customer,
-            subscriptionId: session.subscription,
-            createdAt: new Date().toISOString(),
-          }));
         }
+
+        await saveApiKeyRecord(env.API_KEYS, apiKey, {
+          ...existingKeyRecord,
+          active: true,
+          billingActive: true,
+          subscriptionStatus: "active",
+          monthlyQuota: existingKeyRecord?.monthlyQuota ?? PRO_MONTHLY_LIMIT,
+          email: session.customer_details?.email || existingKeyRecord?.email || "unknown",
+          stripeCustomerId: session.customer,
+          subscriptionId: session.subscription,
+          createdAt: existingKeyRecord?.createdAt || new Date().toISOString(),
+          cancelledAt: undefined,
+          reactivatedAt: existingKeyRecord ? new Date().toISOString() : undefined,
+        });
 
         return new Response(
           `<!DOCTYPE html>
@@ -851,7 +1319,7 @@ export default {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Welcome to Ground Truth MCP Pro!</title>
+  <title>Welcome to Ground Truth Pro!</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 
@@ -924,7 +1392,7 @@ export default {
 <body>
   <div class="container">
     <div class="success-icon">🎉</div>
-    <h1>Welcome to Ground Truth MCP Pro!</h1>
+    <h1>Welcome to Ground Truth Pro!</h1>
     <p>Your subscription is active. Here's your API key:</p>
     
     <div class="api-key-box" id="apiKeyBox">
@@ -934,11 +1402,19 @@ export default {
     
     <div class="instructions">
       <h3>How to Use Your API Key</h3>
-      <p>Add this header to all your MCP requests:</p>
+      <p>Direct MCP over HTTP is session-based. Initialize once, then send your API key on tool calls:</p>
       <pre>X-API-Key: ${apiKey}</pre>
+      <p style="margin-top: 15px;">Default monthly quota: 5,000 tool requests.</p>
       
       <p style="margin-top: 15px;">Example with curl:</p>
-      <pre>curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+      <pre>SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+  -H "Accept: application/json, text/event-stream" \\
+  -H "Content-Type: application/json" \\
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ground-truth-success","version":"1.0.0"}},"id":0}' | tr -d '\\r' | awk '/^mcp-session-id:/ {print $2}')"
+
+curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+  -H "Accept: application/json, text/event-stream" \\
+  -H "Mcp-Session-Id: $SESSION_ID" \\
   -H "X-API-Key: ${apiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"estimate_market","arguments":{"query":"mcp server"}},"id":1}'</pre>
@@ -990,32 +1466,39 @@ export default {
         const event = JSON.parse(body) as {
           type: string;
           data: {
-            object: {
-              customer: string;
-              subscription: string;
-              customer_details?: { email?: string };
-            };
+            object: Record<string, unknown>;
           };
         };
 
         if (event.type === "checkout.session.completed") {
           // Already handled in /api/success, but we can log here
           console.log("Checkout completed:", event.data.object.customer);
-        } else if (event.type === "customer.subscription.deleted") {
-          // Mark API key as inactive
-          const customerId = event.data.object.customer;
-          const keysList = await env.API_KEYS.list({ prefix: "gt_live_" });
-          
-          for (const key of keysList.keys) {
-            const data = await env.API_KEYS.get(key.name, "json") as { stripeCustomerId: string } | null;
-            if (data?.stripeCustomerId === customerId) {
-              await env.API_KEYS.put(key.name, JSON.stringify({
-                ...data,
-                active: false,
-                cancelledAt: new Date().toISOString(),
-              }));
-              break;
-            }
+        } else if (
+          event.type === "customer.subscription.updated" ||
+          event.type === "customer.subscription.deleted"
+        ) {
+          const customerId = typeof event.data.object.customer === "string"
+            ? event.data.object.customer
+            : null;
+          const subscriptionId = typeof event.data.object.id === "string"
+            ? event.data.object.id
+            : undefined;
+          const subscriptionStatus = typeof event.data.object.status === "string"
+            ? event.data.object.status
+            : event.type === "customer.subscription.deleted"
+              ? "canceled"
+              : undefined;
+
+          if (customerId) {
+            const billingActive = isStripeSubscriptionActive(subscriptionStatus);
+            await updateCustomerBillingState(env.API_KEYS, customerId, {
+              active: billingActive,
+              billingActive,
+              subscriptionStatus,
+              subscriptionId,
+              cancelledAt: billingActive ? undefined : new Date().toISOString(),
+              reactivatedAt: billingActive ? new Date().toISOString() : undefined,
+            });
           }
         }
 
@@ -1041,88 +1524,557 @@ export default {
   <meta name="base:app_id" content="69956c02e0d5d2cf831b5fc8" />
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ground Truth MCP</title>
+  <title>Ground Truth — Stop your AI from being wrong</title>
+  <meta name="description" content="Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { 
+    body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+      background:
+        radial-gradient(circle at top, rgba(124, 138, 255, 0.14), transparent 32%),
+        radial-gradient(circle at 20% 20%, rgba(74, 222, 128, 0.08), transparent 20%),
+        #0a0a0a;
+      color: #e0e0e0;
       min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
     }
-    .container { 
-      max-width: 800px; 
+    a { color: #7c8aff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .shell {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 0 24px 48px;
+    }
+
+    .hero {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 88px 0 64px;
       text-align: center;
     }
-    h1 { font-size: 3rem; margin-bottom: 20px; }
-    p { font-size: 1.2rem; margin-bottom: 30px; opacity: 0.9; }
-    .links { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; }
-    .link-btn {
-      background: white;
-      color: #667eea;
-      padding: 15px 30px;
-      border-radius: 8px;
-      text-decoration: none;
-      font-weight: bold;
-      transition: transform 0.2s, box-shadow 0.2s;
+    .eyebrow {
       display: inline-block;
+      margin-bottom: 18px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid #2b2b3a;
+      background: rgba(20, 20, 20, 0.85);
+      color: #a9b3ff;
+      font-size: 0.8rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
     }
-    .link-btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+    .hero h1 {
+      font-size: 3.2rem;
+      color: #fff;
+      margin-bottom: 16px;
+      line-height: 1.15;
     }
-    .pricing-link {
-      background: #ffd700;
-      color: #764ba2;
+    .hero .sub {
+      font-size: 1.15rem;
+      color: #9c9cb2;
+      max-width: 700px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
     }
-    .features {
-      margin-top: 50px;
-      text-align: left;
-      background: rgba(255,255,255,0.1);
-      padding: 30px;
+    .cta-row {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .btn {
+      display: inline-block;
+      padding: 14px 32px;
       border-radius: 12px;
-      backdrop-filter: blur(10px);
+      font-weight: 600;
+      font-size: 1rem;
+      transition: transform 0.15s, box-shadow 0.15s;
+      border: none;
+      cursor: pointer;
     }
-    .features h2 { margin-bottom: 20px; text-align: center; }
-    .features ul { list-style: none; }
-    .features li {
-      padding: 10px 0;
-      padding-left: 30px;
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(124,138,255,0.25); text-decoration: none; }
+    .btn-primary { background: #7c8aff; color: #0a0a0a; }
+    .btn-secondary { background: transparent; color: #7c8aff; border: 1px solid #333; }
+
+    .hero-meta {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .hero-meta span {
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid #242432;
+      background: rgba(17, 17, 23, 0.9);
+      color: #b4b4c8;
+      font-size: 0.85rem;
+    }
+
+    section {
+      padding: 0 0 64px;
+    }
+    section h2 {
+      font-size: 1.7rem;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+    .section-intro {
+      color: #8f8fa3;
+      max-width: 760px;
+      line-height: 1.7;
+      margin-bottom: 24px;
+    }
+
+    .card-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .card {
+      background: rgba(20, 20, 20, 0.92);
+      border: 1px solid #242432;
+      border-radius: 18px;
+      padding: 20px 24px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.2);
+    }
+    .card h3 { color: #fff; font-size: 1rem; margin-bottom: 8px; }
+    .card p { color: #8f8fa3; font-size: 0.95rem; line-height: 1.6; }
+
+    .workflow-card .tool-tag,
+    .verification-card .tool-tag {
+      display: inline-block;
+      margin-top: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #17172a;
+      color: #a9b3ff;
+      font-size: 0.8rem;
+      border: 1px solid #2b2b3a;
+    }
+
+    .pricing-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .plan {
+      background: rgba(20, 20, 20, 0.92);
+      border: 1px solid #242432;
+      border-radius: 18px;
+      padding: 24px;
+    }
+    .plan.pro { border-color: #7c8aff; }
+    .plan .label { color: #a9b3ff; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .plan h3 { color: #fff; font-size: 1.4rem; margin: 10px 0 8px; }
+    .plan .price { color: #fff; font-size: 2.2rem; font-weight: 700; margin-bottom: 12px; }
+    .plan .price span { color: #73738a; font-size: 1rem; font-weight: 400; }
+    .plan p { color: #9a9ab1; line-height: 1.6; margin-bottom: 16px; }
+    .plan ul { list-style: none; display: grid; gap: 10px; }
+    .plan li {
+      color: #d0d0dc;
+      padding-left: 22px;
       position: relative;
+      line-height: 1.5;
     }
-    .features li:before {
-      content: "✓";
+    .plan li::before {
+      content: "\\2713";
       position: absolute;
       left: 0;
-      font-weight: bold;
+      color: #4ade80;
+      font-weight: 700;
+    }
+
+    .code-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .code-card {
+      background: rgba(20, 20, 20, 0.92);
+      border: 1px solid #242432;
+      border-radius: 18px;
+      overflow: hidden;
+    }
+    .code-card h3 {
+      padding: 18px 20px 0;
+      color: #fff;
+      font-size: 1rem;
+    }
+    .code-card p {
+      padding: 8px 20px 0;
+      color: #8f8fa3;
+      font-size: 0.92rem;
+      line-height: 1.6;
+    }
+
+    .code-block {
+      background: transparent;
+      padding: 18px 20px 20px;
+      overflow-x: auto;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 0.82rem;
+      color: #d5d5e0;
+      line-height: 1.6;
+      white-space: pre;
+    }
+
+    .setup-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .setup-card {
+      background: rgba(20, 20, 20, 0.92);
+      border: 1px solid #242432;
+      border-radius: 18px;
+      padding: 20px;
+    }
+    .setup-card h3 { color: #fff; font-size: 1rem; margin-bottom: 10px; }
+    .setup-card p { color: #8f8fa3; line-height: 1.6; margin-bottom: 14px; }
+    .setup-card pre {
+      overflow-x: auto;
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 0.82rem;
+      line-height: 1.6;
+      color: #d5d5e0;
+      white-space: pre;
+    }
+
+    .mcp-note {
+      margin-bottom: 20px;
+      color: #9a9ab1;
+      line-height: 1.7;
+    }
+    .mcp-note strong { color: #fff; }
+
+    .link-row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+
+    .footer {
+      padding: 40px 0;
+      border-top: 1px solid #222;
+      text-align: center;
+      color: #666;
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 900px) {
+      .card-grid,
+      .pricing-grid,
+      .code-grid,
+      .setup-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 2.3rem; }
+      .hero { padding-top: 64px; }
+      .shell { padding-left: 18px; padding-right: 18px; }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Ground Truth MCP Server</h1>
-    <p>Let AI agents validate their own claims with real, live data from the web.</p>
-    
-    <div class="links">
-      <a href="/mcp" class="link-btn">MCP Endpoint</a>
-      <a href="/pricing" class="link-btn pricing-link">💳 Pricing & API Keys</a>
-      <a href="/stats" class="link-btn">📊 Stats</a>
+  <div class="shell">
+    <div class="hero">
+      <div class="eyebrow">Verification Layer For AI Agents</div>
+      <h1>Stop your AI from being wrong.</h1>
+      <p class="sub">Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.</p>
+      <div class="cta-row">
+        <a href="/pricing" class="btn btn-primary">View Pricing</a>
+        <a href="#mcp-setup" class="btn btn-secondary">See MCP Setup</a>
+      </div>
+      <div class="hero-meta">
+        <span>Live data checks</span>
+        <span>Direct API or MCP</span>
+        <span>Cloudflare Workers</span>
+      </div>
     </div>
-    
-    <div class="features">
-      <h2>🛠 Available Tools</h2>
-      <ul>
-        <li><strong>check_endpoint</strong> (FREE) - Probe any URL/API endpoint</li>
-        <li><strong>estimate_market</strong> ($9/mo) - Count packages in npm/PyPI</li>
-        <li><strong>check_pricing</strong> ($9/mo) - Extract pricing from websites</li>
-        <li><strong>compare_competitors</strong> ($9/mo) - Side-by-side comparisons</li>
-        <li><strong>verify_claim</strong> ($9/mo) - Cross-reference claims</li>
-        <li><strong>test_hypothesis</strong> ($9/mo) - Automated fact-checking</li>
-      </ul>
+
+    <section id="what-it-verifies">
+      <h2>What Ground Truth verifies</h2>
+      <p class="section-intro">Ground Truth helps agents check the kind of facts that are most likely to drift, break, or get invented under pressure.</p>
+      <div class="card-grid">
+        <div class="card verification-card">
+          <h3>Verify a pricing claim</h3>
+          <p>Pull the live pricing page before your agent quotes a number like "Notion costs $8 per user per month."</p>
+          <span class="tool-tag">check_pricing</span>
+        </div>
+        <div class="card verification-card">
+          <h3>Check whether a competitor exists</h3>
+          <p>Search npm or PyPI before your agent says there is no alternative in a category.</p>
+          <span class="tool-tag">estimate_market</span>
+        </div>
+        <div class="card verification-card">
+          <h3>Validate an API endpoint</h3>
+          <p>Confirm the URL exists, responds, and looks real before recommending it to a user or team.</p>
+          <span class="tool-tag">check_endpoint</span>
+        </div>
+        <div class="card verification-card">
+          <h3>Compare package popularity</h3>
+          <p>Compare live package metadata instead of guessing which package is more active or widely used.</p>
+          <span class="tool-tag">compare_competitors</span>
+        </div>
+        <div class="card verification-card">
+          <h3>Test a market assumption</h3>
+          <p>Turn assumptions like "this category is still small" into pass/fail checks against live data.</p>
+          <span class="tool-tag">test_hypothesis</span>
+        </div>
+        <div class="card verification-card">
+          <h3>Confirm whether a support policy applies</h3>
+          <p>Check public help, support, or policy pages before your agent repeats a claim as fact.</p>
+          <span class="tool-tag">verify_claim</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="why-verification">
+      <h2>Why AI agents need verification</h2>
+      <p class="section-intro">Training data does not tell you what changed this week. Ground Truth gives agents a last-mile check before they answer, recommend, or act.</p>
+      <div class="card-grid">
+        <div class="card">
+          <h3>Pricing changes quietly</h3>
+          <p>Agents often repeat old prices long after a plan page changed. Live verification catches that drift.</p>
+        </div>
+        <div class="card">
+          <h3>Endpoints look real even when they are not</h3>
+          <p>A confident recommendation is not the same as a working API. Ground Truth checks the endpoint first.</p>
+        </div>
+        <div class="card">
+          <h3>Competitive claims get invented</h3>
+          <p>Agents say "no competitors" or "most popular" without checking the current market. Registry data gives them a way to prove it.</p>
+        </div>
+        <div class="card">
+          <h3>Policies and support terms move</h3>
+          <p>Support plans, public terms, and help-center language change over time. Verification keeps answers tied to the live source.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="workflows">
+      <h2>Example workflows</h2>
+      <p class="section-intro">Use Ground Truth when an answer should be checked before it leaves the model.</p>
+      <div class="card-grid">
+        <div class="card workflow-card">
+          <h3>Pricing claim</h3>
+          <p>Before an agent says "Stripe has a free tier," it checks the live pricing page and returns what it found.</p>
+        </div>
+        <div class="card workflow-card">
+          <h3>Competitor existence</h3>
+          <p>Before an agent says there is no alternative to Prisma for edge deployments, it searches the registry for real packages.</p>
+        </div>
+        <div class="card workflow-card">
+          <h3>API validation</h3>
+          <p>Before an agent recommends an endpoint in docs or support, it confirms the endpoint responds.</p>
+        </div>
+        <div class="card workflow-card">
+          <h3>Package comparison</h3>
+          <p>Before an agent says Vue has overtaken React, it compares live package metadata side by side.</p>
+        </div>
+        <div class="card workflow-card">
+          <h3>Market assumption</h3>
+          <p>Before an agent says the MCP ecosystem is still tiny, it runs a count-based hypothesis test.</p>
+        </div>
+        <div class="card workflow-card">
+          <h3>Support policy confirmation</h3>
+          <p>Before an agent repeats a support entitlement, it checks the current public support page for evidence.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="pricing">
+      <h2>Free vs Pro</h2>
+      <p class="section-intro">Start with a quick check. Upgrade when your agents need broader verification coverage and higher limits.</p>
+      <div class="pricing-grid">
+        <div class="plan">
+          <div class="label">Free</div>
+          <h3>Quick validation</h3>
+          <div class="price">$0</div>
+          <p>Best for basic endpoint checks and limited verification needs.</p>
+          <ul>
+            <li>Only <code>check_endpoint</code></li>
+            <li>100 requests per calendar month</li>
+            <li>No API key required for the free check</li>
+          </ul>
+        </div>
+        <div class="plan pro">
+          <div class="label">Pro</div>
+          <h3>Full verification layer</h3>
+          <div class="price">$9<span>/month</span></div>
+          <p>Built for teams that want Ground Truth wired into an always-on AI workflow.</p>
+          <ul>
+            <li>Requires <code>X-API-Key</code></li>
+            <li>5,000 requests per calendar month by default</li>
+            <li>Usage tracked per API key and tool</li>
+            <li>Competitor comparison</li>
+            <li>Claim verification</li>
+            <li>Market checks</li>
+            <li>Structured reports</li>
+            <li>Priority response</li>
+          </ul>
+        </div>
+      </div>
+      <div class="link-row">
+        <a href="/pricing" class="btn btn-primary">Get Pro Access</a>
+        <a href="/mcp" class="btn btn-secondary">Try The Free Check</a>
+      </div>
+    </section>
+
+    <section id="api-examples">
+      <h2>API examples</h2>
+      <p class="section-intro">Use Ground Truth directly over HTTP if you want verification in a script, backend, or agent loop.</p>
+      <div class="code-grid">
+        <div class="code-card">
+          <h3>Direct API <code>curl</code> call</h3>
+          <p>Initialize the MCP session, then verify a pricing claim against a live pricing page.</p>
+          <div class="code-block">SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+  -H "Accept: application/json, text/event-stream" \\
+  -H "Content-Type: application/json" \\
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ground-truth-example","version":"1.0.0"}},"id":0}' | tr -d '\\r' | awk '/^mcp-session-id:/ {print $2}')"
+
+curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \\
+  -H "Accept: application/json, text/event-stream" \\
+  -H "Content-Type: application/json" \\
+  -H "Mcp-Session-Id: $SESSION_ID" \\
+  -H "X-API-Key: $GROUND_TRUTH_API_KEY" \\
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "check_pricing",
+      "arguments": {
+        "url": "https://stripe.com/pricing"
+      }
+    },
+    "id": 1
+  }'</div>
+        </div>
+        <div class="code-card">
+          <h3>JavaScript <code>fetch</code> example</h3>
+          <p>Compare package popularity from code.</p>
+          <div class="code-block">const initResponse = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+  method: "POST",
+  headers: {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    jsonrpc: "2.0",
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: {
+        name: "ground-truth-example",
+        version: "1.0.0",
+      },
+    },
+    id: 0,
+  }),
+});
+
+const sessionId = initResponse.headers.get("mcp-session-id");
+
+if (!sessionId) {
+  throw new Error("Missing mcp-session-id from initialize response");
+}
+
+const response = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+  method: "POST",
+  headers: {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+    "Mcp-Session-Id": sessionId,
+    "X-API-Key": process.env.GROUND_TRUTH_API_KEY,
+  },
+  body: JSON.stringify({
+    jsonrpc: "2.0",
+    method: "tools/call",
+    params: {
+      name: "compare_competitors",
+      arguments: {
+        packages: ["react", "vue"],
+        registry: "npm",
+      },
+    },
+    id: 1,
+  }),
+});
+
+const result = await response.json();
+console.log(result);</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="mcp-setup">
+      <h2>MCP setup</h2>
+      <p class="mcp-note"><strong>MCP</strong> stands for Model Context Protocol. If you use Claude Desktop or Cursor, Ground Truth can plug in as a verification tool so your agent checks live data before it responds.</p>
+      <div class="setup-grid">
+        <div class="setup-card">
+          <h3>Claude Desktop</h3>
+          <p>Add Ground Truth to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>.</p>
+          <pre>{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "headers": {
+        "X-API-Key": "gt_live_your_key_here"
+      }
+    }
+  }
+}</pre>
+        </div>
+        <div class="setup-card">
+          <h3>Cursor</h3>
+          <p>Add Ground Truth to <code>.cursor/mcp.json</code> in your project or <code>~/.cursor/mcp.json</code> globally.</p>
+          <pre>{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "headers": {
+        "X-API-Key": "gt_live_your_key_here"
+      }
+    }
+  }
+}</pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="use-cases">
+      <h2>Use cases</h2>
+      <p class="section-intro">Ground Truth fits anywhere an AI agent needs a final check before sharing an answer or taking action.</p>
+      <div class="card-grid">
+        <div class="card">
+          <h3>Support</h3>
+          <p>Verify pricing claims, confirm whether a support policy applies, and check whether an API endpoint a customer asks about actually exists.</p>
+        </div>
+        <div class="card">
+          <h3>Product</h3>
+          <p>Test market assumptions, check whether a competitor exists, and compare package popularity before you lock in a direction.</p>
+        </div>
+        <div class="card">
+          <h3>Legal</h3>
+          <p>Confirm support and policy language on live public pages before repeating it internally or externally.</p>
+        </div>
+        <div class="card">
+          <h3>Market research</h3>
+          <p>Compare competitor pricing, count category players, and turn broad assumptions into structured live checks.</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      <p>Built on Cloudflare Workers &middot; <a href="/pricing">Pricing</a> &middot; <a href="/stats">Stats</a> &middot; <a href="https://github.com/anish632/ground-truth-mcp">GitHub</a></p>
+      <p style="margin-top: 8px;">Made by <a href="https://github.com/anish632">Anish Das</a></p>
     </div>
   </div>
 </body>
@@ -1136,8 +2088,8 @@ export default {
     // ───────────────────────────────────────────────
     if (url.pathname === "/stats") {
       try {
-        const id = env.GROUND_TRUTH_MCP.idFromName("ground-truth");
-        const stub = env.GROUND_TRUTH_MCP.get(id);
+        const id = env.MCP_OBJECT.idFromName("ground-truth");
+        const stub = env.MCP_OBJECT.get(id);
         return stub.fetch(new Request("https://internal/stats"));
       } catch {
         return new Response(JSON.stringify({ error: "Stats unavailable" }), {

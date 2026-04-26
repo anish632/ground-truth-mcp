@@ -2,17 +2,18 @@
 	"name": "ground-truth-mcp",
 	"version": "0.3.0",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "MCP server that lets AI agents validate their own claims by checking real endpoints, counting market competitors, and testing hypotheses against live data.",
+	"description": "Stop your AI from being wrong. Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.",
 	"keywords": [
 		"mcp",
 		"model-context-protocol",
 		"ai",
-		"validation",
+		"verification",
 		"fact-checking",
 		"ground-truth",
-		"api-testing",
-		"market-research",
-		"hypothesis-testing"
+		"ai-agents",
+		"claim-verification",
+		"competitor-analysis",
+		"api-validation"
 	],
 	"author": "Anish Das <anishdasmail@gmail.com>",
 	"license": "MIT",
@@ -27,7 +28,10 @@
 	"scripts": {
 		"start": "wrangler dev",
 		"deploy": "wrangler deploy",
+		"build": "wrangler deploy --dry-run",
 		"cf-typegen": "wrangler types --env-interface Env",
+		"typecheck": "tsc --noEmit",
+		"test:usage": "bash ./test-usage-enforcement.sh",
 		"test:x402": "node test-x402-payment.mjs"
 	},
 	"dependencies": {

@@ -1,345 +1,369 @@
-# Ground Truth MCP
+# Ground Truth
 
-> Let AI agents validate their own claims with real, live data from the web.
+**Stop your AI from being wrong.**
+
+Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.
 
 [![MCP](https://img.shields.io/badge/MCP-1.11.0-blue)](https://modelcontextprotocol.io)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
-[![Stripe](https://img.shields.io/badge/Stripe-Billing-purple)](https://stripe.com)
 
-**Live URL:** https://ground-truth-mcp.anish632.workers.dev
-
----
-
-## 🎯 What is Ground Truth?
-
-Ground Truth is an MCP server that provides AI agents with fact-checking and market research tools. Instead of hallucinating or guessing, agents can:
-
-- ✅ Check if an API endpoint actually exists
-- 📊 Count real market competitors
-- 💰 Extract actual pricing from websites
-- 🔍 Compare packages side-by-side
-- 🧪 Cross-reference claims against live sources
-- ⚗️ Test hypotheses with structured tests
-
-All results come from live data fetched in real-time, with 5-minute caching for performance.
+**Live:** https://ground-truth-mcp.anish632.workers.dev
 
 ---
 
-## 🚀 Quick Start
+## What Ground Truth Verifies
 
-### Free Tier (No Signup)
+Ground Truth helps agents check facts before they answer, recommend, or act.
 
-Try the `check_endpoint` tool immediately:
+| Verification | What it checks | Example |
+|---|---|---|
+| **Pricing claims** | Pulls live pricing from product pages | "Does Stripe have a free tier?" |
+| **Competitor existence** | Checks whether real alternatives show up in npm or PyPI | "Are there edge-first Prisma alternatives?" |
+| **API endpoints** | Confirms a URL exists and responds | "Does this endpoint return 200?" |
+| **Package popularity** | Compares package metadata side by side | "How do React and Vue compare right now?" |
+| **Market assumptions** | Tests a hypothesis against live counts or responses | "Is this category still small?" |
+| **Support and policy claims** | Checks public pages for language that supports or contradicts a claim | "Does this support policy actually apply?" |
+
+All results come from live data and are cached for 5 minutes for faster repeat checks.
+
+---
+
+## Why AI Agents Need Verification
+
+Training data goes stale. Docs change. Pricing changes. Competitors appear. Endpoints break. Policies move.
+
+Ground Truth gives agents a way to check before they commit:
+
+- Before quoting a price, pull the live pricing page
+- Before saying a competitor does not exist, search the live registry
+- Before recommending an API, confirm the endpoint responds
+- Before calling one package more popular, compare real package metadata
+- Before repeating a policy, verify the language on the current public page
+
+The result is simple: agents that are less confident for the wrong reasons and more reliable when it matters.
+
+---
+
+## Example Workflows
+
+### Verify a pricing claim
+> "Notion costs $8 per user per month for teams."
+
+Use `check_pricing` on the live pricing page before repeating the number.
+
+### Check whether a competitor exists
+> "There is no good edge ORM alternative to Prisma."
+
+Use `estimate_market` to search npm for `edge orm` and see what already exists.
+
+### Validate an API endpoint
+> "Use the OpenAI `/v1/models` endpoint to list available models."
+
+Use `check_endpoint` before recommending it in docs, code, or support replies.
+
+### Compare package popularity
+> "Vue has overtaken React."
+
+Use `compare_competitors` to compare live package metadata instead of guessing.
+
+### Test a market assumption
+> "There are fewer than 50 MCP tools on npm."
+
+Use `test_hypothesis` with a count-based check and return the actual result.
+
+### Confirm whether a support policy applies
+> "AWS Business support includes 24/7 phone support."
+
+Use `verify_claim` against the current AWS support page before treating that as fact.
+
+---
+
+## Free vs Pro
+
+### Free
+
+Best for basic endpoint checks and limited verification needs.
+
+- Only `check_endpoint`
+- 100 requests per calendar month
+- Tracked by Cloudflare client IP in production, or `X-Anonymous-Client-Id` for local/dev testing
+- No signup or API key required
+
+### Pro
+
+Built for agents that need higher limits and broader verification coverage.
+
+- Requires `X-API-Key`
+- Billing must be active
+- Default quota of 5,000 requests per calendar month
+- Monthly usage tracked per API key and tool
+- Competitor comparison
+- Claim verification
+- Market checks
+- Structured reports
+- Priority response
+
+[View pricing](https://ground-truth-mcp.anish632.workers.dev/pricing)
+
+---
+
+## API Examples
+
+### Direct API with `curl`
+
+Direct HTTP calls to `/mcp` are session-based. Initialize once, keep the returned `mcp-session-id`, then call tools with that header.
+
+```bash
+SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-03-26",
+      "capabilities": {},
+      "clientInfo": {
+        "name": "ground-truth-example",
+        "version": "1.0.0"
+      }
+    },
+    "id": 0
+  }' | tr -d '\r' | awk '/^mcp-session-id:/ {print $2}')"
+
+curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -H "X-API-Key: $GROUND_TRUTH_API_KEY" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "check_pricing",
+      "arguments": {
+        "url": "https://stripe.com/pricing"
+      }
+    },
+    "id": 1
+  }'
+```
+
+### JavaScript `fetch`
+
+```javascript
+const initResponse = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+  method: "POST",
+  headers: {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    jsonrpc: "2.0",
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: {
+        name: "ground-truth-example",
+        version: "1.0.0",
+      },
+    },
+    id: 0,
+  }),
+});
+
+const sessionId = initResponse.headers.get("mcp-session-id");
+
+if (!sessionId) {
+  throw new Error("Missing mcp-session-id from initialize response");
+}
+
+const response = await fetch("https://ground-truth-mcp.anish632.workers.dev/mcp", {
+  method: "POST",
+  headers: {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+    "Mcp-Session-Id": sessionId,
+    "X-API-Key": process.env.GROUND_TRUTH_API_KEY,
+  },
+  body: JSON.stringify({
+    jsonrpc: "2.0",
+    method: "tools/call",
+    params: {
+      name: "compare_competitors",
+      arguments: {
+        packages: ["react", "vue"],
+        registry: "npm",
+      },
+    },
+    id: 1,
+  }),
+});
+
+const result = await response.json();
+console.log(result);
+```
+
+### Free endpoint check
 
 ```bash
 curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
+  -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{
     "jsonrpc": "2.0",
     "method": "tools/call",
     "params": {
       "name": "check_endpoint",
-      "arguments": {"url": "https://api.github.com"}
+      "arguments": {
+        "url": "https://api.github.com"
+      }
     },
     "id": 1
   }'
 ```
 
-### Pro Tier ($9/month)
+Lightweight request checks for free access, blocked Pro calls, invalid keys, inactive billing, quota enforcement, and active Pro access live in [test-usage-enforcement.sh](./test-usage-enforcement.sh).
 
-1. Visit [pricing page](https://ground-truth-mcp.anish632.workers.dev/pricing)
-2. Subscribe via Stripe
-3. Get your API key: `gt_live_...`
-4. Add to requests:
+---
+
+## MCP Setup
+
+If you use Claude Desktop, Cursor, or another MCP client, Ground Truth can plug in as a verification tool for your agent.
+
+MCP stands for [Model Context Protocol](https://modelcontextprotocol.io). It is the standard that lets AI apps call external tools.
+
+### Claude Desktop
+
+Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "headers": {
+        "X-API-Key": "gt_live_your_key_here"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Add this to `.cursor/mcp.json` in your project or `~/.cursor/mcp.json` globally:
+
+```json
+{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anish632.workers.dev/mcp",
+      "headers": {
+        "X-API-Key": "gt_live_your_key_here"
+      }
+    }
+  }
+}
+```
+
+### Claude Code skill
+
+If you want the same workflow without running a server, see [claude-skill/](./claude-skill/).
+
+---
+
+## Use Cases
+
+### Support
+
+- Verify a pricing claim before sending it to a customer
+- Check whether a support policy applies before escalating
+- Confirm an API endpoint exists before recommending it in a reply
+
+### Product
+
+- Test whether a market assumption is true before writing a spec
+- Check whether a competitor exists before framing a roadmap
+- Compare package popularity before making a platform choice
+
+### Legal
+
+- Confirm whether a support policy applies on a live public page
+- Verify pricing or packaging claims before repeating them internally
+- Check that a public terms or policy URL is reachable and current
+
+### Market research
+
+- Compare competitor pricing across live pages
+- Count category competitors before entering a space
+- Validate positioning claims with structured checks
+
+---
+
+## Tool Reference
+
+| Tool | Tier | What it does |
+|---|---|---|
+| `check_endpoint` | Free | Checks whether a URL or API endpoint exists and responds |
+| `estimate_market` | Pro | Counts packages in npm or PyPI for a search term |
+| `check_pricing` | Pro | Extracts prices, plans, and free-tier signals from a page |
+| `compare_competitors` | Pro | Compares packages side by side with live metadata |
+| `verify_claim` | Pro | Checks whether live sources support or contradict a claim |
+| `test_hypothesis` | Pro | Runs pass/fail tests against a live-data assumption |
+
+Full reference: [API_USAGE.md](./API_USAGE.md)
+
+---
+
+## Architecture
+
+Ground Truth keeps the current Cloudflare Workers architecture:
+
+- Runtime: Cloudflare Workers
+- Storage: Durable Objects with SQLite for cache and usage logs
+- API keys: Cloudflare KV
+- Billing: Stripe Checkout and subscriptions
+- Protocol: MCP
+- Language: TypeScript
+
+---
+
+## Development
 
 ```bash
-curl -X POST https://ground-truth-mcp.anish632.workers.dev/mcp \
-  -H "X-API-Key: gt_live_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"estimate_market","arguments":{"query":"react","registry":"npm"}},"id":1}'
+cd ground-truth-mcp
+npm install
+npx wrangler dev
 ```
 
----
-
-## 🛠️ Available Tools
-
-| Tool | Free? | Description |
-|------|-------|-------------|
-| `check_endpoint` | ✅ Yes | Probe any URL, get status, timing, auth requirements |
-| `estimate_market` | 💳 Pro | Count packages in npm/PyPI to gauge market size |
-| `check_pricing` | 💳 Pro | Extract pricing from any website |
-| `compare_competitors` | 💳 Pro | Side-by-side package comparison |
-| `verify_claim` | 💳 Pro | Cross-reference claims with live sources |
-| `test_hypothesis` | 💳 Pro | Automated fact-checking with structured tests |
-
-Full API documentation: [API_USAGE.md](./API_USAGE.md)
+Deployment notes live in [SETUP.md](./SETUP.md).
 
 ---
 
-## 💰 Pricing
+## Documentation
 
-### Free Tier
-- **check_endpoint** - Unlimited forever
-
-### Pro Tier - $9/month
-- **All 5 premium tools** - Unlimited usage
-- **5-minute caching** - Fast responses
-- **99.9% uptime SLA**
-- **Cancel anytime** - No questions asked
-
-[Subscribe now →](https://ground-truth-mcp.anish632.workers.dev/pricing)
+- [API_USAGE.md](./API_USAGE.md) for API calls and tool arguments
+- [SETUP.md](./SETUP.md) for deployment and billing setup
+- [claude-skill/](./claude-skill/) for the zero-deployment Claude Code version
 
 ---
 
-## 🏗️ Tech Stack
+## Support
 
-- **Runtime:** Cloudflare Workers (edge computing)
-- **Storage:** Durable Objects with SQLite (caching + usage logs)
-- **API Keys:** Cloudflare KV (encrypted at rest)
-- **Billing:** Stripe Checkout + Subscriptions
-- **Protocol:** Model Context Protocol (MCP)
-- **Language:** TypeScript
+- Email: anishdasmail@gmail.com
+- Issues: https://github.com/anish632/ground-truth-mcp/issues
 
 ---
 
-## 📚 Documentation
+## License
 
-- **[SETUP.md](./SETUP.md)** - Deployment & configuration guide
-- **[API_USAGE.md](./API_USAGE.md)** - API reference & examples
-- **[IMPLEMENTATION_SUMMARY.md](./IMPLEMENTATION_SUMMARY.md)** - Implementation details
+MIT — see [LICENSE](./LICENSE)
 
 ---
 
-## 🔧 Development
+**Made by [Anish Das](https://github.com/anish632)**
 
-### Prerequisites
-
-- Node.js 18+
-- npm or pnpm
-- Cloudflare account
-- Stripe account
-
-### Local Setup
-
-1. **Clone the repo:**
-   ```bash
-   cd "/Users/anishdas/Apps/Ground Truth/ground-truth-mcp"
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Create KV namespace:**
-   ```bash
-   npx wrangler kv namespace create API_KEYS
-   ```
-
-4. **Update wrangler.jsonc** with KV namespace ID
-
-5. **Set secrets:**
-   ```bash
-   npx wrangler secret put STRIPE_SECRET_KEY
-   npx wrangler secret put STRIPE_WEBHOOK_SECRET
-   ```
-
-6. **Run locally:**
-   ```bash
-   npm start
-   # or
-   npx wrangler dev
-   ```
-
-7. **Deploy:**
-   ```bash
-   npm run deploy
-   # or
-   npx wrangler deploy
-   ```
-
-Full setup guide: [SETUP.md](./SETUP.md)
-
----
-
-## 🧪 Testing
-
-### Test Free Tier (No Auth)
-
-```bash
-curl -X POST http://localhost:8787/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "check_endpoint",
-      "arguments": {"url": "https://example.com"}
-    },
-    "id": 1
-  }'
-```
-
-### Test Auth Rejection
-
-```bash
-# Should return 402 (payment required)
-curl -X POST http://localhost:8787/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "estimate_market",
-      "arguments": {"query": "test", "registry": "npm"}
-    },
-    "id": 1
-  }'
-```
-
-### Test Stripe Checkout
-
-1. Visit http://localhost:8787/pricing
-2. Click "Subscribe Now"
-3. Use test card: `4242 4242 4242 4242`
-4. Complete checkout
-5. Verify API key displayed on success page
-
----
-
-## 🔐 Security
-
-- **API Keys:** Stored in Cloudflare KV (encrypted at rest)
-- **Stripe Keys:** Stored as Worker secrets (encrypted)
-- **Webhook Validation:** Signature verification (simplified for MVP)
-- **Key Revocation:** Inactive keys marked on subscription cancellation
-- **Audit Trail:** Keys not deleted, only marked inactive
-
----
-
-## 🚦 Status & Monitoring
-
-- **Homepage:** https://ground-truth-mcp.anish632.workers.dev
-- **Stats:** https://ground-truth-mcp.anish632.workers.dev/stats
-- **Stripe Dashboard:** https://dashboard.stripe.com
-- **Cloudflare Dashboard:** https://dash.cloudflare.com
-
----
-
-## 📊 Architecture
-
-```
-┌─────────────┐
-│   User      │
-└──────┬──────┘
-       │
-       ├─── Free Tier (no auth)
-       │    └─► check_endpoint
-       │
-       ├─── Pro Tier (API key)
-       │    ├─► X-API-Key header
-       │    ├─► Validate against KV
-       │    └─► estimate_market, check_pricing, etc.
-       │
-       └─── x402 (fallback)
-            └─► Crypto payment for single call
-       
-┌─────────────────────────────────────┐
-│   Cloudflare Worker                  │
-├─────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐ │
-│  │ Auth         │  │ Stripe       │ │
-│  │ Middleware   │  │ Integration  │ │
-│  └──────────────┘  └──────────────┘ │
-│         │                 │          │
-│  ┌──────▼──────┐  ┌──────▼────────┐ │
-│  │ KV Store    │  │ Durable       │ │
-│  │ (API Keys)  │  │ Objects       │ │
-│  └─────────────┘  │ (Cache+Logs)  │ │
-│                   └───────────────┘ │
-└─────────────────────────────────────┘
-```
-
----
-
-## 🤝 Contributing
-
-Not accepting external contributions at this time (private project), but feel free to fork for your own use.
-
----
-
-## 📜 License
-
-MIT License - see LICENSE file for details
-
----
-
-## 🆘 Support
-
-- **Email:** anishdasmail@gmail.com
-- **Issues:** https://github.com/anish632/ground-truth-mcp/issues
-- **Twitter:** [@anish632](https://twitter.com/anish632)
-
----
-
-## 🎯 Use Cases
-
-### For AI Agents
-- Validate market research before presenting findings
-- Fact-check claims against live sources
-- Compare competitors with real data
-- Test hypotheses with structured verification
-
-### For Developers
-- Pre-validate APIs before recommending them
-- Check pricing without manual web scraping
-- Estimate package counts for market sizing
-- Automated fact-checking in CI/CD
-
-### For Researchers
-- Cross-reference claims with live data
-- Track package versions over time
-- Monitor pricing changes
-- Validate academic hypotheses
-
----
-
-## 🏆 What Makes Ground Truth Different?
-
-✅ **Live Data:** No stale databases, all results from real-time fetching  
-✅ **Caching:** 5-minute cache for performance without sacrificing freshness  
-✅ **MCP Native:** Built for AI agents from day one  
-✅ **Edge Computing:** Fast responses from Cloudflare's global network  
-✅ **Free Tier:** No credit card required to try it  
-✅ **Transparent Pricing:** $9/month, unlimited usage, no hidden fees  
-✅ **x402 Fallback:** Pay-per-call with crypto if you don't want a subscription  
-
----
-
-## 📈 Roadmap
-
-- [x] Core fact-checking tools
-- [x] Stripe billing integration
-- [x] API key authentication
-- [x] Free tier (check_endpoint)
-- [x] Webhook handling for subscriptions
-- [ ] Usage analytics dashboard
-- [ ] Email notifications
-- [ ] Team accounts
-- [ ] Enterprise tier
-- [ ] Custom integrations
-
----
-
-## 🙏 Acknowledgments
-
-- Built with [MCP SDK](https://github.com/modelcontextprotocol/typescript-sdk)
-- Powered by [Cloudflare Workers](https://workers.cloudflare.com)
-- Payments by [Stripe](https://stripe.com)
-- x402 integration by [@x402](https://x402.org)
-
----
-
-**Made with ❤️ by [Anish Das](https://github.com/anish632)**
-
-_Last updated: March 20, 2026_
+_Last updated: April 26, 2026_
