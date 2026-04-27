@@ -71,6 +71,8 @@ npx wrangler deploy
 
 ### 5. Validate checkout
 
+Use the existing live Stripe product and price for this flow.
+
 1. Open `/pricing`
 2. Start checkout
 3. Complete payment

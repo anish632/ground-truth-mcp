@@ -1,13 +1,13 @@
 ---
 name: ground-truth
-description: Use when you need to verify claims, check API endpoints, assess market competition, or test hypotheses against live data
+description: Use when you need to verify claims, inspect APIs, compare competitors, or test assumptions against live data before acting
 allowed-tools:
   - WebFetch
   - Bash(curl:*)
   - AskUserQuestion
 ---
 
-# /ground-truth — Live Data Verification
+# /ground-truth — Live Verification
 
 Verify claims and hypotheses against real-time data. Never trust training data when live checks are possible.
 
@@ -20,11 +20,11 @@ Verify claims and hypotheses against real-time data. Never trust training data w
 **Examples:**
 ```
 /ground-truth check https://api.openai.com/v1/models
-/ground-truth market: "mcp memory server" on npm
+/ground-truth market: "edge orm" on npm
 /ground-truth pricing: https://stripe.com/pricing
-/ground-truth compare: express fastify koa
-/ground-truth verify: "Anthropic Claude API supports streaming" — check docs.anthropic.com
-/ground-truth hypothesis: "competition in MCP memory tools is low" — test npm count < 10
+/ground-truth compare: react vue
+/ground-truth verify: "AWS Business support includes 24/7 phone support" — check aws.amazon.com/premiumsupport/plans
+/ground-truth hypothesis: "there are fewer than 50 MCP tools on npm" — test npm count < 50
 ```
 
 ---

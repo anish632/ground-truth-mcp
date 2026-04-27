@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.anish632/ground-truth",
-  "description": "Stop your AI from being wrong. Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.",
+  "description": "Verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.",
   "version": "0.3.0",
   "repository": {
     "url": "https://github.com/anish632/ground-truth-mcp",
@@ -10,7 +10,7 @@
   "packages": [
     {
       "registryType": "npm",
-      "identifier": "@anish632/ground-truth-mcp",
+      "identifier": "ground-truth-mcp",
       "version": "0.3.0",
       "transport": { "type": "stdio" }
     }

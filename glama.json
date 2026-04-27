@@ -1,36 +1,6 @@
 {
-  "name": "ground-truth-mcp",
-  "description": "Stop your AI from being wrong. Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting. Free tier available. Also available as a Claude Code skill.",
-  "author": "anish632",
-  "repository": "https://github.com/anish632/ground-truth-mcp",
-  "license": "MIT",
-  "runtime": "cloudflare-workers",
-  "transport": "streamable-http",
-  "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
-  "tools": [
-    {
-      "name": "check_endpoint",
-      "description": "Verify a URL or API endpoint exists. Returns status, auth requirements, response time, content type, and sample response."
-    },
-    {
-      "name": "estimate_market",
-      "description": "Count packages in a space on npm or PyPI. Returns total count, top results with versions and scores."
-    },
-    {
-      "name": "check_pricing",
-      "description": "Extract pricing from any webpage. Returns price points, plan names, free tier, and free trial availability."
-    },
-    {
-      "name": "compare_competitors",
-      "description": "Compare 2-10 packages side-by-side with version, description, license, publish dates, and metadata."
-    },
-    {
-      "name": "verify_claim",
-      "description": "Cross-reference a claim against live web sources. Returns per-source results and an overall verdict."
-    },
-    {
-      "name": "test_hypothesis",
-      "description": "Run structured pass/fail tests against a hypothesis using live data. Returns per-test results and overall verdict."
-    }
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": [
+    "anish632"
   ]
 }

@@ -1,8 +1,10 @@
 # Ground Truth
 
-**Stop your AI from being wrong.**
+**Verification layer for AI agents.**
 
-Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.
+Ground Truth lets AI agents verify claims, inspect APIs, compare competitors, and validate assumptions against live data before acting.
+
+Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.
 
 [![MCP](https://img.shields.io/badge/MCP-1.11.0-blue)](https://modelcontextprotocol.io)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
@@ -82,7 +84,7 @@ Use `verify_claim` against the current AWS support page before treating that as 
 
 ### Free
 
-Best for basic endpoint checks and limited verification needs.
+Free tier includes limited monthly endpoint checks.
 
 - Only `check_endpoint`
 - 100 requests per calendar month
@@ -91,17 +93,12 @@ Best for basic endpoint checks and limited verification needs.
 
 ### Pro
 
-Built for agents that need higher limits and broader verification coverage.
+Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.
 
-- Requires `X-API-Key`
-- Billing must be active
+- Requires `X-API-Key` with active billing
 - Default quota of 5,000 requests per calendar month
 - Monthly usage tracked per API key and tool
-- Competitor comparison
-- Claim verification
-- Market checks
-- Structured reports
-- Priority response
+- Includes `check_pricing`, `verify_claim`, `estimate_market`, `compare_competitors`, and `test_hypothesis`
 
 [View pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing)
 

@@ -1029,7 +1029,7 @@ export default {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth — Pricing</title>
-  <meta name="description" content="Free for quick endpoint checks. Pro for AI agents that need a full verification layer.">
+  <meta name="description" content="Verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -1148,15 +1148,15 @@ export default {
   <div class="page">
     <div class="hero">
       <div class="eyebrow">Verification Layer For AI Agents</div>
-      <h1>Free for a quick check. Pro for real verification.</h1>
-      <p class="sub">Ground Truth helps AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before they act.</p>
+      <h1>Start with endpoint checks. Upgrade for broader verification.</h1>
+      <p class="sub">Ground Truth is a verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
     </div>
 
     <div class="plans">
       <div class="plan">
         <h2>Free</h2>
         <div class="price">$0</div>
-        <p class="desc">Best for basic endpoint checks and limited verification needs.</p>
+        <p class="desc">Free tier includes limited monthly endpoint checks.</p>
         <ul>
           <li>Only <strong>check_endpoint</strong></li>
           <li>100 requests per calendar month</li>
@@ -1169,17 +1169,13 @@ export default {
       <div class="plan plan-pro">
         <h2>Pro</h2>
         <div class="price">$9<span>/month</span></div>
-        <p class="desc">For teams that want Ground Truth as an always-on verification layer for their agents.</p>
+        <p class="desc">Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
         <ul>
           <li>Requires <strong>X-API-Key</strong></li>
           <li>Billing must be active</li>
           <li>5,000 requests per calendar month by default</li>
           <li>Usage tracked per API key and tool</li>
-          <li>Competitor comparison</li>
-          <li>Claim verification</li>
-          <li>Market checks</li>
-          <li>Structured reports</li>
-          <li>Priority response</li>
+          <li>Includes pricing checks, claim verification, market checks, competitor comparisons, and hypothesis tests</li>
         </ul>
         <form action="/api/checkout" method="POST">
           <button type="submit" class="btn btn-primary">Subscribe Now</button>
@@ -1188,7 +1184,7 @@ export default {
     </div>
 
     <div class="note">
-      <strong>What Pro unlocks today:</strong> all six verification tools over MCP or direct API. Free currently exposes only the endpoint checker with a 100-request monthly cap.
+      <strong>What Pro unlocks today:</strong> Free includes <strong>check_endpoint</strong> with a 100-request monthly cap. Pro adds the remaining verification tools with a higher monthly quota.
     </div>
 
     <div class="faq">
@@ -1524,8 +1520,8 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   <meta name="base:app_id" content="69956c02e0d5d2cf831b5fc8" />
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ground Truth — Stop your AI from being wrong</title>
-  <meta name="description" content="Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.">
+  <title>Ground Truth — Verification Layer for AI Agents</title>
+  <meta name="description" content="Verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -1785,8 +1781,8 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   <div class="shell">
     <div class="hero">
       <div class="eyebrow">Verification Layer For AI Agents</div>
-      <h1>Stop your AI from being wrong.</h1>
-      <p class="sub">Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.</p>
+      <h1>Verify before your agents act.</h1>
+      <p class="sub">Ground Truth is a verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
       <div class="cta-row">
         <a href="/pricing" class="btn btn-primary">View Pricing</a>
         <a href="#mcp-setup" class="btn btn-secondary">See MCP Setup</a>
@@ -1891,13 +1887,13 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
 
     <section id="pricing">
       <h2>Free vs Pro</h2>
-      <p class="section-intro">Start with a quick check. Upgrade when your agents need broader verification coverage and higher limits.</p>
+      <p class="section-intro">Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
       <div class="pricing-grid">
         <div class="plan">
           <div class="label">Free</div>
-          <h3>Quick validation</h3>
+          <h3>Endpoint checks</h3>
           <div class="price">$0</div>
-          <p>Best for basic endpoint checks and limited verification needs.</p>
+          <p>Free tier includes limited monthly endpoint checks.</p>
           <ul>
             <li>Only <code>check_endpoint</code></li>
             <li>100 requests per calendar month</li>
@@ -1906,18 +1902,14 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
         </div>
         <div class="plan pro">
           <div class="label">Pro</div>
-          <h3>Full verification layer</h3>
+          <h3>Broader verification</h3>
           <div class="price">$9<span>/month</span></div>
-          <p>Built for teams that want Ground Truth wired into an always-on AI workflow.</p>
+          <p>Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
           <ul>
             <li>Requires <code>X-API-Key</code></li>
             <li>5,000 requests per calendar month by default</li>
             <li>Usage tracked per API key and tool</li>
-            <li>Competitor comparison</li>
-            <li>Claim verification</li>
-            <li>Market checks</li>
-            <li>Structured reports</li>
-            <li>Priority response</li>
+            <li>Includes pricing checks, claim verification, market checks, competitor comparisons, and hypothesis tests</li>
           </ul>
         </div>
       </div>

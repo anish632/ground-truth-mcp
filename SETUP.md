@@ -22,6 +22,8 @@ Current Stripe resources:
 - Webhook secret: `whsec_Q3eNylg2aOnkZkMWLv15Xvq5uDDHhYoz`
 - Webhook URL: `https://ground-truth-mcp.anishdasmail.workers.dev/api/webhook`
 
+These are live production Stripe resources. Reuse them unless pricing or billing structure changes.
+
 ---
 
 ## Required Setup Steps
@@ -112,6 +114,8 @@ Production base URL:
 ---
 
 ### 5. Verify checkout and API key flow
+
+Use the existing live product and price above. Do not create a second production product for the same Pro plan.
 
 1. Visit `https://ground-truth-mcp.anishdasmail.workers.dev/pricing`
 2. Start checkout
@@ -204,4 +208,4 @@ Example:
 - Keep public and internal copy centered on "verification layer for AI agents"
 - Introduce MCP after the value proposition, not before
 - If pricing changes, update Stripe, `src/index.ts`, `README.md`, and `API_USAGE.md` together
-- If the Stripe dashboard still shows the old product label, rename it to `Ground Truth` for consistency
+- The current live Stripe dashboard label is `Ground Truth MCP`; rename it to `Ground Truth` only if you want tighter branding consistency

@@ -2,7 +2,7 @@
 	"name": "ground-truth-mcp",
 	"version": "0.3.0",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "Stop your AI from being wrong. Ground Truth lets AI agents verify claims, check live data, compare competitors, inspect APIs, and validate assumptions before acting.",
+	"description": "Verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.",
 	"keywords": [
 		"mcp",
 		"model-context-protocol",

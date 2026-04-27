@@ -1,8 +1,10 @@
 # Ground Truth API Guide
 
-**Stop your AI from being wrong.**
+**Verification layer for AI agents.**
 
 Ground Truth gives AI agents a verification layer they can call before answering, recommending, or taking action.
+
+Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.
 
 This guide covers what Ground Truth verifies, how Free and Pro differ, direct API examples, MCP setup, and every available tool.
 
@@ -27,7 +29,7 @@ If the answer depends on live data, Ground Truth is designed to check it first.
 
 ### Free
 
-Best for basic endpoint checks and limited verification needs.
+Free tier includes limited monthly endpoint checks.
 
 - Only `check_endpoint`
 - 100 requests per calendar month
@@ -36,17 +38,12 @@ Best for basic endpoint checks and limited verification needs.
 
 ### Pro
 
-Unlocks the full verification layer for agents that need broader coverage.
+Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.
 
-- Requires `X-API-Key`
-- Billing must be active
+- Requires `X-API-Key` with active billing
 - Default quota of 5,000 requests per calendar month
 - Monthly usage tracked per API key and tool
-- Competitor comparison
-- Claim verification
-- Market checks
-- Structured reports
-- Priority response
+- Includes `check_pricing`, `verify_claim`, `estimate_market`, `compare_competitors`, and `test_hypothesis`
 
 To use Pro, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing) and send your key in `X-API-Key`.
 
