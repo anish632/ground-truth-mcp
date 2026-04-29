@@ -340,6 +340,24 @@ Deployment notes live in [SETUP.md](./SETUP.md).
 
 ---
 
+## Glama Release
+
+Glama releases are Docker-based, not GitHub releases. This repo includes a `Dockerfile` that starts the Worker locally through Wrangler on port `3000`.
+
+```bash
+docker build -t ground-truth-mcp .
+docker run --rm -p 3000:3000 ground-truth-mcp
+```
+
+For the Glama flow:
+
+1. Claim the server in Glama.
+2. Open the Dockerfile admin page, use this repository `Dockerfile`, and run the deploy test.
+3. After the deploy test succeeds, click **Make Release**, choose a version, and publish.
+4. If the score page still shows `No LICENSE`, trigger a re-scan in the Glama admin interface after GitHub has recognized the root `LICENSE` file.
+
+---
+
 ## Documentation
 
 - [API_USAGE.md](./API_USAGE.md) for API calls and tool arguments
@@ -363,4 +381,4 @@ MIT — see [LICENSE](./LICENSE)
 
 **Made by [Anish Das](https://github.com/anish632)**
 
-_Last updated: April 26, 2026_
+_Last updated: April 29, 2026_

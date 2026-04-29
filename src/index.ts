@@ -535,12 +535,16 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     this.server.tool(
       "check_endpoint",
-      "Probe a URL/API endpoint and report: status, auth requirements, " +
-      "response time, content type, rate limit headers, and a sample of " +
-      "the response structure. Use this to verify whether an API actually " +
-      "exists and what it returns before recommending it.",
+      "Verify whether a public URL or API endpoint is reachable before you " +
+      "recommend, document, or build against it. Returns a structured health " +
+      "snapshot with HTTP status, content type, response time, whether auth " +
+      "appears to be required, whether the endpoint is rate-limited, and a " +
+      "sample of the response body. Use this for lightweight availability " +
+      "checks, not for validating business logic or authenticated flows.",
       {
-        url: z.string().url().describe("The URL to probe"),
+        url: z.string().url().describe(
+          "Fully qualified http(s) URL to probe, for example https://api.github.com",
+        ),
       },
       async ({ url }) => {
         const start = Date.now();
@@ -591,13 +595,18 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     this.server.tool(
       "estimate_market",
-      "Count how many packages/servers exist in a space. " +
-      "Searches npm or PyPI and returns: total count, " +
-      "top results with versions and activity signals. " +
-      "Results are cached for 5 minutes.",
+      "Estimate how crowded a software category is by searching npm or PyPI. " +
+      "Returns the total number of matching packages plus representative top " +
+      "results so an agent can check whether a market is empty, growing, or " +
+      "already competitive. Use this to validate market-size claims, not to " +
+      "pick a winner among named alternatives. Results are cached for 5 minutes.",
       {
-        query: z.string().describe("Search query (e.g. 'mcp memory server')"),
-        registry: z.enum(["npm", "pypi"]).default("npm").describe("Which registry to search"),
+        query: z.string().describe(
+          "Search phrase to evaluate, for example 'mcp memory server' or 'edge orm'",
+        ),
+        registry: z.enum(["npm", "pypi"]).default("npm").describe(
+          "Package registry to search. Use 'npm' for JavaScript ecosystems and 'pypi' for Python ecosystems.",
+        ),
       },
       async ({ query, registry }) => {
         if (registry === "npm") {
@@ -648,11 +657,15 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     this.server.tool(
       "check_pricing",
-      "Fetch a product or service's pricing page and extract pricing signals. " +
-      "Returns detected price points, plan names, and whether free tiers exist. " +
-      "Use this to verify pricing claims before presenting them.",
+      "Inspect a live pricing page and extract pricing signals before you quote " +
+      "costs, free tiers, or plan names. Returns detected prices, plan labels, " +
+      "free-option signals, and whether the response came from cache. Use this " +
+      "for first-pass verification of public pricing pages; it relies on page " +
+      "content extraction and may miss JavaScript-rendered or heavily obfuscated pricing.",
       {
-        url: z.string().url().describe("URL of the pricing page to analyze"),
+        url: z.string().url().describe(
+          "Public pricing-page URL to analyze, for example https://stripe.com/pricing",
+        ),
       },
       async ({ url }) => {
         try {
@@ -696,13 +709,17 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     this.server.tool(
       "compare_competitors",
-      "Compare two or more npm/PyPI packages side-by-side. " +
-      "Returns version, description, and npm score for each. " +
-      "Use this to validate 'X is better than Y' claims.",
+      "Compare two or more named packages side by side using live registry data. " +
+      "Returns package metadata such as latest version, description, license, " +
+      "publish history, and keywords so an agent can sanity-check claims like " +
+      "'tool A is newer than tool B' or 'this package is still maintained'. " +
+      "Use this when you already know the candidate package names.",
       {
         packages: z.array(z.string()).min(2).max(10)
-          .describe("Package names to compare (e.g. ['express', 'fastify', 'koa'])"),
-        registry: z.enum(["npm", "pypi"]).default("npm"),
+          .describe("Two to ten exact package names to compare, for example ['react', 'vue']"),
+        registry: z.enum(["npm", "pypi"]).default("npm").describe(
+          "Registry that all package names belong to. All compared packages must come from the same registry.",
+        ),
       },
       async ({ packages, registry }) => {
         const comparisons = [];
@@ -765,16 +782,19 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     this.server.tool(
       "verify_claim",
-      "Cross-reference a factual claim against multiple live sources. " +
-      "Provide the claim and a list of URLs to check. Returns whether each " +
-      "source supports or contradicts the claim based on substring matching. " +
-      "Use this to fact-check before presenting information.",
+      "Check whether a factual claim is supported by a specific set of live " +
+      "public URLs. For each source, the tool looks for the supplied keywords " +
+      "and reports how strongly the page appears to support the claim, plus an " +
+      "overall verdict summary. Use this when you already have candidate evidence " +
+      "sources; support is based on keyword matching rather than deep semantic reasoning.",
       {
-        claim: z.string().describe("The factual claim to verify"),
+        claim: z.string().describe(
+          "Plain-language claim to verify, for example 'AWS Business support includes 24/7 phone support'",
+        ),
         evidence_urls: z.array(z.string().url()).min(1).max(10)
-          .describe("URLs to cross-reference against"),
+          .describe("One to ten public URLs that are likely to contain evidence about the claim"),
         keywords: z.array(z.string()).min(1).max(20)
-          .describe("Keywords that should appear if the claim is true"),
+          .describe("Keywords or phrases that should appear in the evidence if the claim is supported"),
       },
       async ({ claim, evidence_urls, keywords }) => {
         const sources = [];
@@ -829,20 +849,76 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     this.server.tool(
       "test_hypothesis",
-      "Test a specific factual claim against live data. " +
-      "Give it a hypothesis and a list of tests to run. " +
-      "Returns pass/fail for each test and an overall verdict. " +
-      "Use this to grade your own research before presenting it.",
+      "Run a small verification plan against live data and summarize whether a " +
+      "hypothesis is supported. Each test can check endpoint availability, npm " +
+      "search counts, or whether a response contains expected text. Returns per-test " +
+      "pass/fail results plus an overall verdict. Use this when a single claim " +
+      "depends on multiple concrete checks. Use verify_claim when you already " +
+      "have evidence URLs, estimate_market for category sizing, and compare_competitors " +
+      "when you already know the package names.",
       {
-        hypothesis: z.string().describe("The claim to test"),
-        tests: z.array(z.object({
-          description: z.string(),
-          type: z.enum(["endpoint_exists", "npm_count_above", "npm_count_below", "response_contains"]),
-          url: z.string().optional(),
-          query: z.string().optional(),
-          threshold: z.number().optional(),
-          substring: z.string().optional(),
-        })),
+        hypothesis: z.string().describe(
+          "Claim to test, for example 'there are fewer than 50 MCP email servers on npm'",
+        ),
+        tests: z.array(
+          z.discriminatedUnion("type", [
+            z.object({
+              description: z.string().describe(
+                "Short explanation of what this endpoint check is proving",
+              ),
+              type: z.literal("endpoint_exists").describe(
+                "Checks whether a public endpoint responds with an OK HTTP status",
+              ),
+              url: z.string().url().describe(
+                "Public URL to probe, for example https://api.github.com",
+              ),
+            }),
+            z.object({
+              description: z.string().describe(
+                "Short explanation of what this npm lower-bound count check is proving",
+              ),
+              type: z.literal("npm_count_above").describe(
+                "Checks whether an npm search returns more results than the threshold",
+              ),
+              query: z.string().describe(
+                "npm search phrase to count, for example 'mcp email server'",
+              ),
+              threshold: z.number().describe(
+                "Minimum count that the npm search results must exceed",
+              ),
+            }),
+            z.object({
+              description: z.string().describe(
+                "Short explanation of what this npm upper-bound count check is proving",
+              ),
+              type: z.literal("npm_count_below").describe(
+                "Checks whether an npm search returns fewer results than the threshold",
+              ),
+              query: z.string().describe(
+                "npm search phrase to count, for example 'business verification mcp'",
+              ),
+              threshold: z.number().describe(
+                "Maximum count that the npm search results must stay below",
+              ),
+            }),
+            z.object({
+              description: z.string().describe(
+                "Short explanation of what this response-content check is proving",
+              ),
+              type: z.literal("response_contains").describe(
+                "Checks whether the fetched response body includes the expected text",
+              ),
+              url: z.string().url().describe(
+                "Public URL whose response body should contain the expected text",
+              ),
+              substring: z.string().describe(
+                "Exact text to search for in the fetched response body",
+              ),
+            }),
+          ]),
+        ).describe(
+          "Ordered list of checks to run. Each test shape depends on its type and includes only the fields that type needs.",
+        ),
       },
       async ({ hypothesis, tests }) => {
         const results = [];
@@ -853,7 +929,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
           try {
             switch (test.type) {
               case "endpoint_exists": {
-                if (!test.url) { passed = false; actual = "no url provided"; break; }
                 const resp = await fetch(test.url, {
                   headers: { "User-Agent": "GroundTruth/0.3" },
                 });
@@ -863,19 +938,17 @@ export class GroundTruthMCP extends McpAgent<Env> {
               }
               case "npm_count_above":
               case "npm_count_below": {
-                if (!test.query) { passed = false; actual = "no query provided"; break; }
                 const data = await searchNpm(sql, test.query, 1);
                 const total = data.total ?? 0;
                 actual = total;
                 passed = test.type === "npm_count_above"
-                  ? total > (test.threshold ?? 0)
-                  : total < (test.threshold ?? 0);
+                  ? total > test.threshold
+                  : total < test.threshold;
                 break;
               }
               case "response_contains": {
-                if (!test.url) { passed = false; actual = "no url provided"; break; }
                 const { body } = await cachedFetch(sql, test.url);
-                passed = test.substring ? body.includes(test.substring) : false;
+                passed = body.includes(test.substring);
                 actual = `${body.length} chars, contains=${passed}`;
                 break;
               }
