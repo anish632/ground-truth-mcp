@@ -1,8 +1,8 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "Verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.",
+	"description": "Read-only verification tools for AI agents: check endpoint reachability, scan pricing pages, verify claims against evidence URLs, size package markets, compare named packages, and test multi-step hypotheses against live public data.",
 	"keywords": [
 		"mcp",
 		"model-context-protocol",

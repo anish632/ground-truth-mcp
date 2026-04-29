@@ -41,12 +41,15 @@ echo "4️⃣  Verifying publication..."
 sleep 3
 npm view ground-truth-mcp
 
+PACKAGE_VERSION=$(node -p 'require("./package.json").version')
+
 echo ""
 echo "✅ Successfully published to npm!"
 echo ""
 echo "📦 Next steps:"
 echo "   1. Confirm npm metadata still matches the current Ground Truth positioning"
 echo "   2. Review README, server.json, and glama.json on the published package"
+echo "   3. Create and push a stable GitHub tag like v$PACKAGE_VERSION to trigger the GitHub release workflow"
 echo ""
 echo "   MCP registry:"
 echo "   1. Install mcp-publisher: brew install mcp-publisher"

@@ -2,12 +2,14 @@
 
 **Verification layer for AI agents.**
 
-Ground Truth lets AI agents verify claims, inspect APIs, compare competitors, and validate assumptions against live data before acting.
+Ground Truth gives AI agents read-only verification tools for live public data: endpoint reachability checks, pricing-page scans, evidence-backed claim checks, package-market sizing, named package comparisons, and multi-step hypothesis tests.
 
 Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.
 
 [![MCP](https://img.shields.io/badge/MCP-1.11.0-blue)](https://modelcontextprotocol.io)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
+[![CI](https://github.com/anish632/ground-truth-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/anish632/ground-truth-mcp/actions/workflows/ci.yml)
+[![ground-truth-mcp MCP server](https://glama.ai/mcp/servers/anish632/ground-truth-mcp/badges/score.svg)](https://glama.ai/mcp/servers/anish632/ground-truth-mcp)
 
 **Live:** https://ground-truth-mcp.anishdasmail.workers.dev
 
@@ -27,6 +29,18 @@ Ground Truth helps agents check facts before they answer, recommend, or act.
 | **Support and policy claims** | Checks public pages for language that supports or contradicts a claim | "Does this support policy actually apply?" |
 
 All results come from live data and are cached for 5 minutes for faster repeat checks.
+
+---
+
+## Complementary MCP Servers
+
+Ground Truth is strongest when paired with a broader discovery or browser tool:
+
+- [Tavily MCP Server](https://glama.ai/mcp/servers/%40tavily-ai/tavily-mcp) for real-time web search and content discovery before you run a claim or pricing check.
+- [Firecrawl MCP Server](https://glama.ai/mcp/servers/%40ampcome-mcps/firecrawl-mcp) for deeper crawling and JS-heavy page extraction when raw HTML heuristics are not enough.
+- [mcp-server-browserbase](https://glama.ai/mcp/servers/%40browserbase/mcp-server-browserbase) for interactive browser verification on pages that need clicks, auth, or client-side rendering.
+
+These are complementary to Ground Truth rather than substitutes: they help you find or render the page, while Ground Truth helps you verify the resulting claim.
 
 ---
 
@@ -340,6 +354,19 @@ Deployment notes live in [SETUP.md](./SETUP.md).
 
 ---
 
+## GitHub Releases
+
+Stable GitHub releases are created automatically when you push a version tag that matches `v*`.
+
+```bash
+git tag v0.3.1
+git push origin v0.3.1
+```
+
+That tag triggers [`.github/workflows/release.yml`](./.github/workflows/release.yml), which typechecks the project and publishes a GitHub release from the tag. This is the repo-side piece Glama uses to detect stable releases during maintenance scans.
+
+---
+
 ## Glama Release
 
 Glama releases are Docker-based, not GitHub releases. This repo includes a `Dockerfile` that starts the Worker locally through Wrangler on port `3000`.
@@ -355,6 +382,7 @@ For the Glama flow:
 2. Open the Dockerfile admin page, use this repository `Dockerfile`, and run the deploy test.
 3. After the deploy test succeeds, click **Make Release**, choose a version, and publish.
 4. If the score page still shows `No LICENSE`, trigger a re-scan in the Glama admin interface after GitHub has recognized the root `LICENSE` file.
+5. If the score page still shows `No related servers`, add the complementary servers above from the claimed Glama UI. That checklist item is managed on Glama's side rather than in `glama.json`.
 
 If Glama generates an `mcp-proxy`-based build spec instead of using the repository `Dockerfile`, point the command at `npm run start:glama:stdio`. That bridge exposes the existing remote Ground Truth MCP endpoint over stdio so `mcp-proxy` can host it.
 

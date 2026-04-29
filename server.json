@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.anish632/ground-truth",
-  "description": "Verification layer for AI agents with live endpoint, pricing, market, and claim checks.",
-  "version": "0.3.0",
+  "description": "Read-only verification tools for AI agents: endpoint reachability, pricing-page scans, evidence-backed claim checks, package-market sizing, named package comparisons, and multi-step hypothesis tests against live public data.",
+  "version": "0.3.1",
   "repository": {
     "url": "https://github.com/anish632/ground-truth-mcp",
     "source": "github"

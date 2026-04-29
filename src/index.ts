@@ -24,7 +24,7 @@ const MAX_CACHEABLE_BODY_BYTES = 512 * 1024;
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
 const NEON_DB_URL = "postgresql://neondb_owner:npg_Eekbuc84GiTW@ep-fragrant-dawn-ai5pgip6-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require";
-const SERVER_VERSION = "0.3.0";
+const SERVER_VERSION = "0.3.1";
 
 // --- Free tier tools ---
 const FREE_TOOLS = ["check_endpoint"];
@@ -93,6 +93,16 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), withJsonHeaders(init));
 }
 
+function structuredToolResult<T extends Record<string, unknown>>(structuredContent: T) {
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(structuredContent, null, 2),
+    }],
+    structuredContent,
+  };
+}
+
 function getJsonRpcErrorCode(status: number): number {
   switch (status) {
     case 401:
@@ -145,6 +155,28 @@ function jsonError(
         },
     { status },
   );
+}
+
+function normalizeHttpUrlInput(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  const candidate = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    if (!parsed.hostname) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
 }
 
 function normalizeApiKeyRecord(data: unknown): ApiKeyRecord | null {
@@ -506,7 +538,7 @@ async function searchPyPI(sql: SqlTagFn, query: string): Promise<{ total: number
 // --- MCP Server ---
 export class GroundTruthMCP extends McpAgent<Env> {
   server = withX402(
-    new McpServer({ name: "ground-truth", version: "0.3.0" }),
+    new McpServer({ name: "ground-truth", version: "0.3.1" }),
     {
       network: "base-sepolia",
       recipient: "0xB04BD750b67e7b00c95eAC8995eb9F8441309196",
@@ -530,26 +562,80 @@ export class GroundTruthMCP extends McpAgent<Env> {
       } catch (_) {}
     };
 
+    const readOnlyNetworkToolAnnotations = {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    } as const;
+
     // ───────────────────────────────────────────────
     // FREE: check_endpoint
     // ───────────────────────────────────────────────
-    this.server.tool(
+    this.server.registerTool(
       "check_endpoint",
-      "Verify whether a public URL or API endpoint is reachable before you " +
-      "recommend, document, or build against it. Returns a structured health " +
-      "snapshot with HTTP status, content type, response time, whether auth " +
-      "appears to be required, whether the endpoint is rate-limited, and a " +
-      "sample of the response body. Use this for lightweight availability " +
-      "checks, not for validating business logic or authenticated flows.",
       {
-        url: z.string().url().describe(
-          "Fully qualified http(s) URL to probe, for example https://api.github.com",
-        ),
+        title: "Endpoint Reachability Check",
+        description:
+          "Perform one live, unauthenticated fetch against a public URL or API endpoint " +
+          "before you recommend it, document it, or build on top of it. Use this when " +
+          "the question is simply whether an endpoint currently responds and what kind " +
+          "of response it returns. It reports HTTP status, content type, elapsed time, " +
+          "likely auth/rate-limit signals, and a short response sample. Do not use it " +
+          "to validate authenticated flows, POST side effects, or deeper business logic.",
+        inputSchema: {
+          url: z.string().trim().min(1).describe(
+            "Public http(s) URL or bare domain to probe. Bare domains like google.com are accepted and normalized to https:// automatically.",
+          ),
+        },
+        outputSchema: {
+          inputUrl: z.string().describe(
+            "Original user input when normalization changed it, for example when https:// was added.",
+          ).optional(),
+          url: z.string().describe(
+            "Normalized URL that was actually fetched.",
+          ),
+          accessible: z.boolean().describe(
+            "True when the endpoint returned a 2xx HTTP status.",
+          ),
+          status: z.number().int().describe(
+            "HTTP status code returned by the endpoint, when a response was received.",
+          ).optional(),
+          contentType: z.string().nullable().describe(
+            "Response Content-Type header, if present.",
+          ).optional(),
+          responseTimeMs: z.number().int().nonnegative().describe(
+            "Elapsed request time in milliseconds.",
+          ).optional(),
+          authRequired: z.boolean().describe(
+            "True when the server responded with 401 or 403, which usually means credentials are required.",
+          ).optional(),
+          rateLimited: z.boolean().describe(
+            "True when the server responded with 429 Too Many Requests.",
+          ).optional(),
+          sampleResponse: z.string().describe(
+            "First 1,000 characters of the response body for quick inspection.",
+          ).optional(),
+          error: z.string().describe(
+            "Validation or network error when the request could not be completed.",
+          ).optional(),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
       },
       async ({ url }) => {
+        const normalizedUrl = normalizeHttpUrlInput(url);
+        if (!normalizedUrl) {
+          logUsage("check_endpoint", false);
+          return structuredToolResult({
+            url,
+            accessible: false,
+            error: "Invalid URL. Use a public http(s) URL or a bare domain like google.com.",
+          });
+        }
+
         const start = Date.now();
         try {
-          const resp = await fetch(url, {
+          const resp = await fetch(normalizedUrl, {
             headers: { "User-Agent": "GroundTruth/0.3" },
           });
           const elapsed = Date.now() - start;
@@ -557,35 +643,27 @@ export class GroundTruthMCP extends McpAgent<Env> {
           const sample = body.slice(0, 1000);
           logUsage("check_endpoint", true);
 
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({
-                url,
-                accessible: resp.ok,
-                status: resp.status,
-                contentType: resp.headers.get("content-type"),
-                responseTimeMs: elapsed,
-                authRequired: resp.status === 401 || resp.status === 403,
-                rateLimited: resp.status === 429,
-                sampleResponse: sample,
-              }, null, 2),
-            }],
-          };
+          return structuredToolResult({
+            ...(normalizedUrl !== url ? { inputUrl: url } : {}),
+            url: normalizedUrl,
+            accessible: resp.ok,
+            status: resp.status,
+            contentType: resp.headers.get("content-type"),
+            responseTimeMs: elapsed,
+            authRequired: resp.status === 401 || resp.status === 403,
+            rateLimited: resp.status === 429,
+            sampleResponse: sample,
+          });
         } catch (e: unknown) {
           const message = e instanceof Error ? e.message : String(e);
           logUsage("check_endpoint", false);
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({
-                url,
-                accessible: false,
-                error: message,
-                responseTimeMs: Date.now() - start,
-              }, null, 2),
-            }],
-          };
+          return structuredToolResult({
+            ...(normalizedUrl !== url ? { inputUrl: url } : {}),
+            url: normalizedUrl,
+            accessible: false,
+            error: message,
+            responseTimeMs: Date.now() - start,
+          });
         }
       }
     );
@@ -593,20 +671,53 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     // PAID $0.01: estimate_market (npm + PyPI)
     // ───────────────────────────────────────────────
-    this.server.tool(
+    this.server.registerTool(
       "estimate_market",
-      "Estimate how crowded a software category is by searching npm or PyPI. " +
-      "Returns the total number of matching packages plus representative top " +
-      "results so an agent can check whether a market is empty, growing, or " +
-      "already competitive. Use this to validate market-size claims, not to " +
-      "pick a winner among named alternatives. Results are cached for 5 minutes.",
       {
-        query: z.string().describe(
-          "Search phrase to evaluate, for example 'mcp memory server' or 'edge orm'",
-        ),
-        registry: z.enum(["npm", "pypi"]).default("npm").describe(
-          "Package registry to search. Use 'npm' for JavaScript ecosystems and 'pypi' for Python ecosystems.",
-        ),
+        title: "Package Market Search",
+        description:
+          "Search npm or PyPI to estimate how crowded a package category is before " +
+          "you claim that a market is empty, niche, or competitive. Use this when " +
+          "you have a category or search phrase such as 'edge orm' and want live " +
+          "result counts plus representative matches. Do not use it to compare exact " +
+          "known package names or to infer adoption from downloads; it reflects search " +
+          "results, not market share. Registry responses are cached for 5 minutes.",
+        inputSchema: {
+          query: z.string().trim().min(2).describe(
+            "Short registry search phrase to evaluate, for example 'mcp memory server' or 'edge orm'.",
+          ),
+          registry: z.enum(["npm", "pypi"]).default("npm").describe(
+            "Registry to search. Use 'npm' for JavaScript ecosystems and 'pypi' for Python ecosystems.",
+          ),
+        },
+        outputSchema: {
+          query: z.string().describe(
+            "Search phrase that was evaluated.",
+          ),
+          registry: z.enum(["npm", "pypi"]).describe(
+            "Registry that was searched.",
+          ),
+          totalResults: z.number().int().nonnegative().nullable().describe(
+            "Total number of matching packages reported by the registry search.",
+          ),
+          topResults: z.array(z.object({
+            name: z.string().describe(
+              "Package name returned by the registry.",
+            ),
+            description: z.string().describe(
+              "Short package summary from registry metadata.",
+            ),
+            version: z.string().describe(
+              "Latest version string returned in the result payload.",
+            ),
+            score: z.string().describe(
+              "Registry relevance score when npm provides one.",
+            ).optional(),
+          })).describe(
+            "Representative top search matches that help interpret the market count.",
+          ),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
       },
       async ({ query, registry }) => {
         if (registry === "npm") {
@@ -622,50 +733,80 @@ export class GroundTruthMCP extends McpAgent<Env> {
             });
           }
           logUsage("estimate_market", true);
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({
-                query, registry,
-                totalResults: data.total,
-                topResults: results,
-              }, null, 2),
-            }],
-          };
+          return structuredToolResult({
+            query,
+            registry,
+            totalResults: data.total ?? null,
+            topResults: results,
+          });
         }
 
         if (registry === "pypi") {
           const data = await searchPyPI(sql, query);
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({
-                query, registry,
-                totalResults: data.total,
-                topResults: data.results,
-              }, null, 2),
-            }],
-          };
+          logUsage("estimate_market", true);
+          return structuredToolResult({
+            query,
+            registry,
+            totalResults: data.total,
+            topResults: data.results,
+          });
         }
 
-        return { content: [{ type: "text" as const, text: "Registry not supported" }] };
+        return structuredToolResult({
+          query,
+          registry,
+          totalResults: 0,
+          topResults: [],
+        });
       }
     );
 
     // ───────────────────────────────────────────────
     // PAID $0.02: check_pricing
     // ───────────────────────────────────────────────
-    this.server.tool(
+    this.server.registerTool(
       "check_pricing",
-      "Inspect a live pricing page and extract pricing signals before you quote " +
-      "costs, free tiers, or plan names. Returns detected prices, plan labels, " +
-      "free-option signals, and whether the response came from cache. Use this " +
-      "for first-pass verification of public pricing pages; it relies on page " +
-      "content extraction and may miss JavaScript-rendered or heavily obfuscated pricing.",
       {
-        url: z.string().url().describe(
-          "Public pricing-page URL to analyze, for example https://stripe.com/pricing",
-        ),
+        title: "Pricing Page Scan",
+        description:
+          "Fetch a public pricing page and extract first-pass pricing signals before " +
+          "you quote plan costs, free tiers, or plan names. Use this when you have a " +
+          "likely pricing URL and need live evidence from the page itself. The tool " +
+          "uses heuristic text extraction from the fetched HTML, so it can miss " +
+          "JavaScript-rendered, logged-in, or heavily obfuscated pricing details. " +
+          "Results are cached for 5 minutes.",
+        inputSchema: {
+          url: z.string().url().describe(
+            "Public pricing-page URL to analyze, for example https://stripe.com/pricing.",
+          ),
+        },
+        outputSchema: {
+          url: z.string().describe(
+            "Pricing page that was analyzed.",
+          ),
+          cached: z.boolean().describe(
+            "True when the page body came from the 5-minute cache instead of a new fetch.",
+          ).optional(),
+          pricesFound: z.array(z.string()).describe(
+            "Distinct price-like strings extracted from the page text.",
+          ).optional(),
+          plansDetected: z.array(z.string()).describe(
+            "Normalized plan labels detected from the page text.",
+          ).optional(),
+          hasFreeOption: z.boolean().describe(
+            "True when the page contains signals that a free plan or $0 option exists.",
+          ).optional(),
+          hasFreeTrial: z.boolean().describe(
+            "True when the page contains signals that a free trial exists.",
+          ).optional(),
+          pageLength: z.number().int().nonnegative().describe(
+            "Size of the fetched page body in characters.",
+          ).optional(),
+          error: z.string().describe(
+            "Fetch or parsing error when the pricing page could not be analyzed.",
+          ).optional(),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
       },
       async ({ url }) => {
         try {
@@ -679,27 +820,21 @@ export class GroundTruthMCP extends McpAgent<Env> {
           const hasFreeTrial = /free\s*trial|try\s*(?:it\s*)?free|start\s*free/i.test(body);
 
           logUsage("check_pricing", true);
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({
-                url,
-                cached: fromCache,
-                pricesFound: prices,
-                plansDetected: plans,
-                hasFreeOption: hasFree,
-                hasFreeTrial: hasFreeTrial,
-                pageLength: body.length,
-              }, null, 2),
-            }],
-          };
+          return structuredToolResult({
+            url,
+            cached: fromCache,
+            pricesFound: prices,
+            plansDetected: plans,
+            hasFreeOption: hasFree,
+            hasFreeTrial: hasFreeTrial,
+            pageLength: body.length,
+          });
         } catch (e: unknown) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({ url, error: e instanceof Error ? e.message : String(e) }, null, 2),
-            }],
-          };
+          logUsage("check_pricing", false);
+          return structuredToolResult({
+            url,
+            error: e instanceof Error ? e.message : String(e),
+          });
         }
       }
     );
@@ -707,19 +842,74 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     // PAID $0.03: compare_competitors
     // ───────────────────────────────────────────────
-    this.server.tool(
+    this.server.registerTool(
       "compare_competitors",
-      "Compare two or more named packages side by side using live registry data. " +
-      "Returns package metadata such as latest version, description, license, " +
-      "publish history, and keywords so an agent can sanity-check claims like " +
-      "'tool A is newer than tool B' or 'this package is still maintained'. " +
-      "Use this when you already know the candidate package names.",
       {
-        packages: z.array(z.string()).min(2).max(10)
-          .describe("Two to ten exact package names to compare, for example ['react', 'vue']"),
-        registry: z.enum(["npm", "pypi"]).default("npm").describe(
-          "Registry that all package names belong to. All compared packages must come from the same registry.",
-        ),
+        title: "Named Package Comparison",
+        description:
+          "Compare two or more exact package names side by side using live npm or " +
+          "PyPI metadata. Use this when you already know the candidate packages and " +
+          "need evidence for claims such as 'tool A is newer', 'tool B is still " +
+          "maintained', or 'these packages use different licenses'. Do not use it to " +
+          "discover unknown alternatives; use estimate_market for category search and " +
+          "market sizing instead. Registry responses are cached for 5 minutes.",
+        inputSchema: {
+          packages: z.array(z.string().trim().min(1)).min(2).max(10).describe(
+            "Two to ten exact package names from the same registry, for example ['react', 'vue'].",
+          ),
+          registry: z.enum(["npm", "pypi"]).default("npm").describe(
+            "Registry that all package names belong to. All compared packages must come from the same registry.",
+          ),
+        },
+        outputSchema: {
+          packages: z.array(z.string()).describe(
+            "Package names that were requested for comparison.",
+          ),
+          registry: z.enum(["npm", "pypi"]).describe(
+            "Registry used for all comparisons.",
+          ),
+          comparisons: z.array(z.object({
+            name: z.string().describe(
+              "Package name that was looked up.",
+            ),
+            found: z.boolean().describe(
+              "True when the registry lookup succeeded and returned package metadata.",
+            ),
+            description: z.string().describe(
+              "Short package summary from the registry.",
+            ).optional(),
+            latestVersion: z.string().describe(
+              "Latest package version known to the registry.",
+            ).optional(),
+            license: z.union([z.string(), z.null()]).describe(
+              "Package license metadata when provided by the registry.",
+            ).optional(),
+            lastPublished: z.union([z.string(), z.null()]).describe(
+              "Publish timestamp of the latest version when npm provides one.",
+            ).optional(),
+            created: z.union([z.string(), z.null()]).describe(
+              "Package creation timestamp when npm provides one.",
+            ).optional(),
+            totalVersions: z.number().int().nonnegative().describe(
+              "Number of published versions when npm metadata includes a version history.",
+            ).optional(),
+            author: z.string().describe(
+              "Package author when PyPI metadata includes one.",
+            ).optional(),
+            keywords: z.array(z.string()).describe(
+              "Registry keywords or tags associated with the package.",
+            ).optional(),
+            cached: z.boolean().describe(
+              "True when the lookup came from the 5-minute cache.",
+            ).optional(),
+            error: z.string().describe(
+              "Fetch error when registry metadata could not be retrieved for this package.",
+            ).optional(),
+          })).describe(
+            "Per-package lookup results returned in the same order as the input package list.",
+          ),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
       },
       async ({ packages, registry }) => {
         const comparisons = [];
@@ -768,33 +958,89 @@ export class GroundTruthMCP extends McpAgent<Env> {
           }
         }
         logUsage("compare_competitors", true);
-          return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({ packages, registry, comparisons }, null, 2),
-          }],
-        };
+        return structuredToolResult({ packages, registry, comparisons });
       }
     );
 
     // ───────────────────────────────────────────────
     // PAID $0.05: verify_claim
     // ───────────────────────────────────────────────
-    this.server.tool(
+    this.server.registerTool(
       "verify_claim",
-      "Check whether a factual claim is supported by a specific set of live " +
-      "public URLs. For each source, the tool looks for the supplied keywords " +
-      "and reports how strongly the page appears to support the claim, plus an " +
-      "overall verdict summary. Use this when you already have candidate evidence " +
-      "sources; support is based on keyword matching rather than deep semantic reasoning.",
       {
-        claim: z.string().describe(
-          "Plain-language claim to verify, for example 'AWS Business support includes 24/7 phone support'",
-        ),
-        evidence_urls: z.array(z.string().url()).min(1).max(10)
-          .describe("One to ten public URLs that are likely to contain evidence about the claim"),
-        keywords: z.array(z.string()).min(1).max(20)
-          .describe("Keywords or phrases that should appear in the evidence if the claim is supported"),
+        title: "Claim Support Check",
+        description:
+          "Check whether a factual claim is supported by a specific set of public " +
+          "evidence URLs that you already have. For each source, the tool performs a " +
+          "case-insensitive keyword match over the fetched page body, then marks that " +
+          "source as supporting the claim when at least half of the supplied keywords " +
+          "appear. Use this for evidence-backed claim checks on known pages, not for " +
+          "open-ended search or semantic fact checking. Registry responses are cached " +
+          "for 5 minutes.",
+        inputSchema: {
+          claim: z.string().trim().min(5).describe(
+            "Plain-language claim to verify, for example 'AWS Business support includes 24/7 phone support'.",
+          ),
+          evidence_urls: z.array(z.string().url()).min(1).max(10).describe(
+            "One to ten public documentation, pricing, policy, or support URLs that are likely to contain direct evidence for the claim.",
+          ),
+          keywords: z.array(z.string().trim().min(1)).min(1).max(20).describe(
+            "Keywords or short phrases that should appear on supporting pages. Matching is case-insensitive substring matching.",
+          ),
+        },
+        outputSchema: {
+          claim: z.string().describe(
+            "Claim that was evaluated.",
+          ),
+          sources: z.array(z.object({
+            url: z.string().describe(
+              "Evidence URL that was checked.",
+            ),
+            accessible: z.boolean().describe(
+              "True when the evidence page could be fetched.",
+            ),
+            cached: z.boolean().describe(
+              "True when the page body came from the 5-minute cache.",
+            ).optional(),
+            keywordsMatched: z.array(z.string()).describe(
+              "Subset of supplied keywords that were found on the page.",
+            ).optional(),
+            keywordsTotal: z.number().int().nonnegative().describe(
+              "Total number of keywords the tool looked for on this page.",
+            ).optional(),
+            matchRatio: z.number().min(0).max(1).describe(
+              "Matched-keyword ratio for this source, from 0 to 1.",
+            ).optional(),
+            supports: z.boolean().describe(
+              "True when the page met the current support threshold of at least half of the supplied keywords.",
+            ),
+            error: z.string().describe(
+              "Fetch error when the evidence page could not be checked.",
+            ).optional(),
+          })).describe(
+            "Per-source evidence results.",
+          ),
+          verdict: z.object({
+            supporting: z.number().int().nonnegative().describe(
+              "Number of sources marked as supporting the claim.",
+            ),
+            contradicting: z.number().int().nonnegative().describe(
+              "Number of sources not marked as supporting the claim.",
+            ),
+            total: z.number().int().nonnegative().describe(
+              "Total number of evidence sources checked.",
+            ),
+            confidence: z.number().min(0).max(1).describe(
+              "Share of sources that supported the claim.",
+            ),
+            summary: z.enum(["CONFIRMED", "UNCONFIRMED", "LIKELY TRUE", "LIKELY FALSE"]).describe(
+              "High-level verdict derived from the supporting-source ratio.",
+            ),
+          }).describe(
+            "Aggregate verdict across all supplied sources.",
+          ),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
       },
       async ({ claim, evidence_urls, keywords }) => {
         const sources = [];
@@ -823,102 +1069,136 @@ export class GroundTruthMCP extends McpAgent<Env> {
         }
         const supporting = sources.filter(s => s.supports).length;
         logUsage("verify_claim", true);
-          return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              claim,
-              sources,
-              verdict: {
-                supporting,
-                contradicting: sources.length - supporting,
-                total: sources.length,
-                confidence: +(supporting / sources.length).toFixed(2),
-                summary: supporting === sources.length ? "CONFIRMED" :
-                         supporting === 0 ? "UNCONFIRMED" :
-                         supporting >= sources.length * 0.5 ? "LIKELY TRUE" : "LIKELY FALSE",
-              },
-            }, null, 2),
-          }],
-        };
+        return structuredToolResult({
+          claim,
+          sources,
+          verdict: {
+            supporting,
+            contradicting: sources.length - supporting,
+            total: sources.length,
+            confidence: +(supporting / sources.length).toFixed(2),
+            summary: supporting === sources.length ? "CONFIRMED" :
+                     supporting === 0 ? "UNCONFIRMED" :
+                     supporting >= sources.length * 0.5 ? "LIKELY TRUE" : "LIKELY FALSE",
+          },
+        });
       }
     );
 
     // ───────────────────────────────────────────────
     // PAID $0.05: test_hypothesis
     // ───────────────────────────────────────────────
-    this.server.tool(
+    this.server.registerTool(
       "test_hypothesis",
-      "Run a small verification plan against live data and summarize whether a " +
-      "hypothesis is supported. Each test can check endpoint availability, npm " +
-      "search counts, or whether a response contains expected text. Returns per-test " +
-      "pass/fail results plus an overall verdict. Use this when a single claim " +
-      "depends on multiple concrete checks. Use verify_claim when you already " +
-      "have evidence URLs, estimate_market for category sizing, and compare_competitors " +
-      "when you already know the package names.",
       {
-        hypothesis: z.string().describe(
-          "Claim to test, for example 'there are fewer than 50 MCP email servers on npm'",
-        ),
-        tests: z.array(
-          z.discriminatedUnion("type", [
-            z.object({
-              description: z.string().describe(
-                "Short explanation of what this endpoint check is proving",
-              ),
-              type: z.literal("endpoint_exists").describe(
-                "Checks whether a public endpoint responds with an OK HTTP status",
-              ),
-              url: z.string().url().describe(
-                "Public URL to probe, for example https://api.github.com",
-              ),
-            }),
-            z.object({
-              description: z.string().describe(
-                "Short explanation of what this npm lower-bound count check is proving",
-              ),
-              type: z.literal("npm_count_above").describe(
-                "Checks whether an npm search returns more results than the threshold",
-              ),
-              query: z.string().describe(
-                "npm search phrase to count, for example 'mcp email server'",
-              ),
-              threshold: z.number().describe(
-                "Minimum count that the npm search results must exceed",
-              ),
-            }),
-            z.object({
-              description: z.string().describe(
-                "Short explanation of what this npm upper-bound count check is proving",
-              ),
-              type: z.literal("npm_count_below").describe(
-                "Checks whether an npm search returns fewer results than the threshold",
-              ),
-              query: z.string().describe(
-                "npm search phrase to count, for example 'business verification mcp'",
-              ),
-              threshold: z.number().describe(
-                "Maximum count that the npm search results must stay below",
-              ),
-            }),
-            z.object({
-              description: z.string().describe(
-                "Short explanation of what this response-content check is proving",
-              ),
-              type: z.literal("response_contains").describe(
-                "Checks whether the fetched response body includes the expected text",
-              ),
-              url: z.string().url().describe(
-                "Public URL whose response body should contain the expected text",
-              ),
-              substring: z.string().describe(
-                "Exact text to search for in the fetched response body",
-              ),
-            }),
-          ]),
-        ).describe(
-          "Ordered list of checks to run. Each test shape depends on its type and includes only the fields that type needs.",
-        ),
+        title: "Multi-step Hypothesis Test",
+        description:
+          "Run a small verification plan made of concrete live checks and summarize " +
+          "whether a hypothesis is supported. Use this when one conclusion depends " +
+          "on multiple simple checks such as endpoint reachability, npm search counts, " +
+          "or whether a page contains an exact substring. This is a coordination tool, " +
+          "not an open-ended research agent: every test must be explicitly defined in " +
+          "advance. Use verify_claim when you already have evidence URLs, estimate_market " +
+          "for category sizing, and compare_competitors when you already know exact package names.",
+        inputSchema: {
+          hypothesis: z.string().trim().min(5).describe(
+            "Claim to test, for example 'there are fewer than 50 MCP email servers on npm'.",
+          ),
+          tests: z.array(
+            z.discriminatedUnion("type", [
+              z.object({
+                description: z.string().trim().min(3).describe(
+                  "Short explanation of what this endpoint check is meant to prove.",
+                ),
+                type: z.literal("endpoint_exists").describe(
+                  "Perform one unauthenticated GET request and pass when the endpoint returns a 2xx HTTP status.",
+                ),
+                url: z.string().url().describe(
+                  "Public URL to probe, for example https://api.github.com.",
+                ),
+              }),
+              z.object({
+                description: z.string().trim().min(3).describe(
+                  "Short explanation of what this npm lower-bound count check is meant to prove.",
+                ),
+                type: z.literal("npm_count_above").describe(
+                  "Search npm and pass when the reported result count is strictly greater than the threshold.",
+                ),
+                query: z.string().trim().min(2).describe(
+                  "npm search phrase to count, for example 'mcp email server'.",
+                ),
+                threshold: z.number().int().nonnegative().describe(
+                  "Lower bound that the npm search result count must exceed.",
+                ),
+              }),
+              z.object({
+                description: z.string().trim().min(3).describe(
+                  "Short explanation of what this npm upper-bound count check is meant to prove.",
+                ),
+                type: z.literal("npm_count_below").describe(
+                  "Search npm and pass when the reported result count is strictly less than the threshold.",
+                ),
+                query: z.string().trim().min(2).describe(
+                  "npm search phrase to count, for example 'business verification mcp'.",
+                ),
+                threshold: z.number().int().nonnegative().describe(
+                  "Upper bound that the npm search result count must stay below.",
+                ),
+              }),
+              z.object({
+                description: z.string().trim().min(3).describe(
+                  "Short explanation of what this response-content check is meant to prove.",
+                ),
+                type: z.literal("response_contains").describe(
+                  "Fetch a public URL and pass when the response body contains the exact substring using case-sensitive matching.",
+                ),
+                url: z.string().url().describe(
+                  "Public URL whose response body should contain the expected text.",
+                ),
+                substring: z.string().min(1).describe(
+                  "Exact case-sensitive text to search for in the fetched response body.",
+                ),
+              }),
+            ]),
+          ).min(1).max(10).describe(
+            "Ordered list of one to ten checks to run. Each test object uses only the fields required by its type.",
+          ),
+        },
+        outputSchema: {
+          hypothesis: z.string().describe(
+            "Hypothesis that was evaluated.",
+          ),
+          tests: z.array(z.object({
+            description: z.string().describe(
+              "Human-readable explanation of the check.",
+            ),
+            type: z.enum(["endpoint_exists", "npm_count_above", "npm_count_below", "response_contains"]).describe(
+              "Test type that was executed.",
+            ),
+            passed: z.boolean().describe(
+              "True when the test condition was satisfied.",
+            ),
+            actual: z.union([z.string(), z.number(), z.null()]).describe(
+              "Observed value or diagnostic string that explains the result.",
+            ),
+          })).describe(
+            "Per-test execution results in input order.",
+          ),
+          verdict: z.object({
+            passed: z.number().int().nonnegative().describe(
+              "Number of tests that passed.",
+            ),
+            failed: z.number().int().nonnegative().describe(
+              "Number of tests that failed.",
+            ),
+            summary: z.enum(["SUPPORTED", "REFUTED", "PARTIALLY SUPPORTED"]).describe(
+              "Aggregate verdict across the full test plan.",
+            ),
+          }).describe(
+            "High-level verdict for the hypothesis.",
+          ),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
       },
       async ({ hypothesis, tests }) => {
         const results = [];
@@ -967,21 +1247,21 @@ export class GroundTruthMCP extends McpAgent<Env> {
         }
         const passedCount = results.filter(r => r.passed).length;
         logUsage("test_hypothesis", true);
-          return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              hypothesis,
-              tests: results,
-              verdict: {
-                passed: passedCount,
-                failed: results.length - passedCount,
-                summary: passedCount === results.length ? "SUPPORTED" :
-                         passedCount === 0 ? "REFUTED" : "PARTIALLY SUPPORTED",
-              },
-            }, null, 2),
-          }],
-        };
+        return structuredToolResult({
+          hypothesis,
+          tests: results as {
+            description: string;
+            type: "endpoint_exists" | "npm_count_above" | "npm_count_below" | "response_contains";
+            passed: boolean;
+            actual: string | number | null;
+          }[],
+          verdict: {
+            passed: passedCount,
+            failed: results.length - passedCount,
+            summary: passedCount === results.length ? "SUPPORTED" :
+                     passedCount === 0 ? "REFUTED" : "PARTIALLY SUPPORTED",
+          },
+        });
       }
     );
   }
