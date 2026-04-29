@@ -356,6 +356,8 @@ For the Glama flow:
 3. After the deploy test succeeds, click **Make Release**, choose a version, and publish.
 4. If the score page still shows `No LICENSE`, trigger a re-scan in the Glama admin interface after GitHub has recognized the root `LICENSE` file.
 
+If Glama generates an `mcp-proxy`-based build spec instead of using the repository `Dockerfile`, point the command at `npm run start:glama:stdio`. That bridge exposes the existing remote Ground Truth MCP endpoint over stdio so `mcp-proxy` can host it.
+
 ---
 
 ## Documentation

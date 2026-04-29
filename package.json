@@ -28,6 +28,7 @@
 	"scripts": {
 		"start": "wrangler dev",
 		"start:glama": "wrangler dev --host 0.0.0.0 --port 3000",
+		"start:glama:stdio": "node ./glama-stdio-bridge.mjs",
 		"deploy": "wrangler deploy",
 		"build": "wrangler deploy --dry-run",
 		"cf-typegen": "wrangler types --env-interface Env",
