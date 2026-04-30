@@ -23,7 +23,6 @@ const MAX_CACHEABLE_BODY_BYTES = 512 * 1024;
 
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
-const NEON_DB_URL = "postgresql://neondb_owner:npg_Eekbuc84GiTW@ep-fragrant-dawn-ai5pgip6-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require";
 const SERVER_VERSION = "0.3.1";
 
 // --- Free tier tools ---
@@ -581,8 +580,10 @@ export class GroundTruthMCP extends McpAgent<Env> {
           "before you recommend it, document it, or build on top of it. Use this when " +
           "the question is simply whether an endpoint currently responds and what kind " +
           "of response it returns. It reports HTTP status, content type, elapsed time, " +
-          "likely auth/rate-limit signals, and a short response sample. Do not use it " +
-          "to validate authenticated flows, POST side effects, or deeper business logic.",
+          "likely auth/rate-limit signals, and a short response sample. A successful " +
+          "result only proves basic reachability at fetch time. Do not use it to " +
+          "validate authenticated flows, POST side effects, JavaScript execution, " +
+          "or deeper business logic.",
         inputSchema: {
           url: z.string().trim().min(1).describe(
             "Public http(s) URL or bare domain to probe. Bare domains like google.com are accepted and normalized to https:// automatically.",
@@ -770,14 +771,17 @@ export class GroundTruthMCP extends McpAgent<Env> {
         title: "Pricing Page Scan",
         description:
           "Fetch a public pricing page and extract first-pass pricing signals before " +
-          "you quote plan costs, free tiers, or plan names. Use this when you have a " +
-          "likely pricing URL and need live evidence from the page itself. The tool " +
-          "uses heuristic text extraction from the fetched HTML, so it can miss " +
-          "JavaScript-rendered, logged-in, or heavily obfuscated pricing details. " +
-          "Results are cached for 5 minutes.",
+          "you quote plan costs, free tiers, or plan names. Use this when you already " +
+          "have a likely pricing URL and need a quick live scan of visible page text. " +
+          "It returns price-like strings, heuristic plan labels, free or free-trial " +
+          "signals, and cache information. It does not map prices to exact plans, " +
+          "normalize currencies, execute checkout flows, or guarantee that a price " +
+          "applies to a specific region or customer type. JavaScript-rendered, " +
+          "logged-in, or heavily obfuscated pricing details can be missed. Results " +
+          "are cached for 5 minutes.",
         inputSchema: {
           url: z.string().url().describe(
-            "Public pricing-page URL to analyze, for example https://stripe.com/pricing.",
+            "Public pricing or plans URL to analyze. Prefer the specific pricing page, for example https://stripe.com/pricing, rather than a generic homepage.",
           ),
         },
         outputSchema: {
@@ -788,16 +792,16 @@ export class GroundTruthMCP extends McpAgent<Env> {
             "True when the page body came from the 5-minute cache instead of a new fetch.",
           ).optional(),
           pricesFound: z.array(z.string()).describe(
-            "Distinct price-like strings extracted from the page text.",
+            "Distinct price-like strings extracted from the page text. These are not linked back to specific plans or billing conditions.",
           ).optional(),
           plansDetected: z.array(z.string()).describe(
-            "Normalized plan labels detected from the page text.",
+            "Lowercased heuristic plan labels detected from the page text. They are useful hints, not authoritative plan identifiers.",
           ).optional(),
           hasFreeOption: z.boolean().describe(
-            "True when the page contains signals that a free plan or $0 option exists.",
+            "True when the page contains signals that a free plan or $0 option exists somewhere on the page. This is a page-level signal, not proof that the offer is currently self-serve or globally available.",
           ).optional(),
           hasFreeTrial: z.boolean().describe(
-            "True when the page contains signals that a free trial exists.",
+            "True when the page contains signals that a free trial exists somewhere on the page.",
           ).optional(),
           pageLength: z.number().int().nonnegative().describe(
             "Size of the fetched page body in characters.",
@@ -850,15 +854,18 @@ export class GroundTruthMCP extends McpAgent<Env> {
           "Compare two or more exact package names side by side using live npm or " +
           "PyPI metadata. Use this when you already know the candidate packages and " +
           "need evidence for claims such as 'tool A is newer', 'tool B is still " +
-          "maintained', or 'these packages use different licenses'. Do not use it to " +
-          "discover unknown alternatives; use estimate_market for category search and " +
-          "market sizing instead. Registry responses are cached for 5 minutes.",
+          "maintained', or 'these packages use different licenses'. It returns " +
+          "per-package registry metadata in input order, with field availability " +
+          "varying by registry. Missing or unpublished packages return found=false. " +
+          "Do not use it to discover unknown alternatives, estimate market size, " +
+          "or compare packages across different registries. Registry responses are " +
+          "cached for 5 minutes.",
         inputSchema: {
           packages: z.array(z.string().trim().min(1)).min(2).max(10).describe(
-            "Two to ten exact package names from the same registry, for example ['react', 'vue'].",
+            "Two to ten exact package names from the same registry, for example ['react', 'vue']. Use exact registry names, not search phrases or categories.",
           ),
           registry: z.enum(["npm", "pypi"]).default("npm").describe(
-            "Registry that all package names belong to. All compared packages must come from the same registry.",
+            "Registry that all package names belong to. All compared packages must come from the same registry, and returned metadata fields differ slightly between npm and PyPI.",
           ),
         },
         outputSchema: {
@@ -906,7 +913,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
               "Fetch error when registry metadata could not be retrieved for this package.",
             ).optional(),
           })).describe(
-            "Per-package lookup results returned in the same order as the input package list.",
+            "Per-package lookup results returned in the same order as the input package list. Some fields only exist for npm or only for PyPI, so consumers should treat absent fields as normal.",
           ),
         },
         annotations: readOnlyNetworkToolAnnotations,
@@ -975,8 +982,9 @@ export class GroundTruthMCP extends McpAgent<Env> {
           "case-insensitive keyword match over the fetched page body, then marks that " +
           "source as supporting the claim when at least half of the supplied keywords " +
           "appear. Use this for evidence-backed claim checks on known pages, not for " +
-          "open-ended search or semantic fact checking. Registry responses are cached " +
-          "for 5 minutes.",
+          "open-ended search, semantic reasoning, or contradiction extraction. The " +
+          "aggregate verdict is driven only by the per-page keyword support ratio. " +
+          "Fetched pages are cached for 5 minutes.",
         inputSchema: {
           claim: z.string().trim().min(5).describe(
             "Plain-language claim to verify, for example 'AWS Business support includes 24/7 phone support'.",
@@ -985,7 +993,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
             "One to ten public documentation, pricing, policy, or support URLs that are likely to contain direct evidence for the claim.",
           ),
           keywords: z.array(z.string().trim().min(1)).min(1).max(20).describe(
-            "Keywords or short phrases that should appear on supporting pages. Matching is case-insensitive substring matching.",
+            "Keywords or short phrases that should appear on supporting pages. Matching is case-insensitive substring matching, so choose phrases that are likely to appear verbatim.",
           ),
         },
         outputSchema: {
@@ -1034,7 +1042,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
               "Share of sources that supported the claim.",
             ),
             summary: z.enum(["CONFIRMED", "UNCONFIRMED", "LIKELY TRUE", "LIKELY FALSE"]).describe(
-              "High-level verdict derived from the supporting-source ratio.",
+              "High-level verdict derived from the supporting-source ratio: all sources supporting => CONFIRMED, none => UNCONFIRMED, majority => LIKELY TRUE, otherwise LIKELY FALSE.",
             ),
           }).describe(
             "Aggregate verdict across all supplied sources.",
@@ -1098,8 +1106,11 @@ export class GroundTruthMCP extends McpAgent<Env> {
           "on multiple simple checks such as endpoint reachability, npm search counts, " +
           "or whether a page contains an exact substring. This is a coordination tool, " +
           "not an open-ended research agent: every test must be explicitly defined in " +
-          "advance. Use verify_claim when you already have evidence URLs, estimate_market " +
-          "for category sizing, and compare_competitors when you already know exact package names.",
+          "advance, and tests run in order with no branching or early exit. The final " +
+          "verdict is mechanical: all tests passing => SUPPORTED, zero passing => " +
+          "REFUTED, otherwise PARTIALLY SUPPORTED. Use verify_claim when you already " +
+          "have evidence URLs, estimate_market for category sizing, and " +
+          "compare_competitors when you already know exact package names.",
         inputSchema: {
           hypothesis: z.string().trim().min(5).describe(
             "Claim to test, for example 'there are fewer than 50 MCP email servers on npm'.",
@@ -1150,7 +1161,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
                   "Short explanation of what this response-content check is meant to prove.",
                 ),
                 type: z.literal("response_contains").describe(
-                  "Fetch a public URL and pass when the response body contains the exact substring using case-sensitive matching.",
+                  "Fetch a public URL and pass when the response body contains the exact substring using case-sensitive matching. The tool does not parse DOM structure or execute JavaScript before matching.",
                 ),
                 url: z.string().url().describe(
                   "Public URL whose response body should contain the expected text.",
@@ -1179,7 +1190,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
               "True when the test condition was satisfied.",
             ),
             actual: z.union([z.string(), z.number(), z.null()]).describe(
-              "Observed value or diagnostic string that explains the result.",
+              "Observed value or diagnostic string that explains the result. The format varies by test type and is meant for human interpretation, not strict machine parsing.",
             ),
           })).describe(
             "Per-test execution results in input order.",
@@ -1192,7 +1203,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
               "Number of tests that failed.",
             ),
             summary: z.enum(["SUPPORTED", "REFUTED", "PARTIALLY SUPPORTED"]).describe(
-              "Aggregate verdict across the full test plan.",
+              "Aggregate verdict across the full test plan: all pass => SUPPORTED, none pass => REFUTED, otherwise PARTIALLY SUPPORTED.",
             ),
           }).describe(
             "High-level verdict for the hypothesis.",

@@ -42,6 +42,12 @@ Ground Truth is strongest when paired with a broader discovery or browser tool:
 
 These are complementary to Ground Truth rather than substitutes: they help you find or render the page, while Ground Truth helps you verify the resulting claim.
 
+If you are filling in Glama related servers for this project, start with these three:
+
+- `Tavily MCP Server`
+- `Firecrawl MCP Server`
+- `mcp-server-browserbase`
+
 ---
 
 ## Why AI Agents Need Verification
@@ -382,7 +388,7 @@ For the Glama flow:
 2. Open the Dockerfile admin page, use this repository `Dockerfile`, and run the deploy test.
 3. After the deploy test succeeds, click **Make Release**, choose a version, and publish.
 4. If the score page still shows `No LICENSE`, trigger a re-scan in the Glama admin interface after GitHub has recognized the root `LICENSE` file.
-5. If the score page still shows `No related servers`, add the complementary servers above from the claimed Glama UI. That checklist item is managed on Glama's side rather than in `glama.json`.
+5. If the score page still shows `No related servers`, use **Add related servers** in the claimed Glama UI and add `Tavily MCP Server`, `Firecrawl MCP Server`, and `mcp-server-browserbase`. That checklist item is managed on Glama's side rather than in `glama.json`.
 
 If Glama generates an `mcp-proxy`-based build spec instead of using the repository `Dockerfile`, point the command at `npm run start:glama:stdio`. That bridge exposes the existing remote Ground Truth MCP endpoint over stdio so `mcp-proxy` can host it.
 

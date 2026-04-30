@@ -48,6 +48,10 @@ npx wrangler secret put STRIPE_WEBHOOK_SECRET
 
 Use your Stripe secret key for `STRIPE_SECRET_KEY` and the webhook secret above for `STRIPE_WEBHOOK_SECRET`.
 
+Optional runtime flag:
+
+- Set `GROUND_TRUTH_TELEMETRY=false` if you want to disable remote usage telemetry while keeping local usage logs in the Durable Object SQLite store.
+
 ---
 
 ### 3. Run locally

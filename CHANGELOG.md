@@ -6,7 +6,11 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
-- No unreleased changes yet.
+- Remove an unused hard-coded database URL from the Worker runtime.
+- Document the `GROUND_TRUTH_TELEMETRY` runtime flag in setup notes.
+- Strengthen tool metadata descriptions to improve Glama quality scoring clarity.
+- Expand CI to run both typecheck and build, with manual workflow dispatch support.
+- Clarify the exact Glama related-server recommendations in the README.
 
 ## [0.3.1] - 2026-04-29
 
