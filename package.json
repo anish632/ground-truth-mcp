@@ -1,13 +1,16 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.3.1",
+	"version": "0.4.0",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "Read-only verification tools for AI agents: check endpoint reachability, scan pricing pages, verify claims against evidence URLs, size package markets, compare named packages, and test multi-step hypotheses against live public data.",
+	"description": "Read-only verification tools for AI agents: free endpoint checks plus paid pricing, compliance, security-header, claim, competitor, and hypothesis verification against live public data.",
 	"keywords": [
 		"mcp",
 		"model-context-protocol",
 		"ai",
 		"verification",
+		"pricing",
+		"compliance",
+		"security",
 		"fact-checking",
 		"ground-truth",
 		"ai-agents",
@@ -17,28 +20,26 @@
 	],
 	"author": "Anish Das <anishdasmail@gmail.com>",
 	"license": "MIT",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/anish632/ground-truth-mcp.git"
-	},
-	"homepage": "https://github.com/anish632/ground-truth-mcp#readme",
-	"bugs": {
-		"url": "https://github.com/anish632/ground-truth-mcp/issues"
-	},
+	"homepage": "https://ground-truth-mcp.anishdasmail.workers.dev/",
 	"scripts": {
 		"start": "wrangler dev",
 		"start:glama": "wrangler dev --host 0.0.0.0 --port 3000",
 		"start:glama:stdio": "node ./glama-stdio-bridge.mjs",
 		"deploy": "wrangler deploy",
+		"deploy:xpay": "wrangler deploy --config wrangler.xpay.jsonc",
 		"build": "wrangler deploy --dry-run",
+		"build:xpay": "wrangler deploy --dry-run --config wrangler.xpay.jsonc",
 		"cf-typegen": "wrangler types --env-interface Env",
 		"typecheck": "tsc --noEmit",
 		"test:usage": "bash ./test-usage-enforcement.sh",
 		"test:x402": "node test-x402-payment.mjs"
 	},
 	"dependencies": {
-		"agents": "^0.4.0",
+		"@x402/core": "^2.3.1",
+		"@x402/evm": "^2.3.1",
 		"@modelcontextprotocol/sdk": "^1.11.0",
+		"agents": "^0.4.0",
+		"viem": "^2.46.2",
 		"zod": "^3.24.0"
 	},
 	"devDependencies": {

@@ -4,9 +4,13 @@
 
 Ground Truth gives AI agents a verification layer they can call before answering, recommending, or taking action.
 
-Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.
+Ground Truth supports three access modes:
 
-This guide covers what Ground Truth verifies, how Free and Pro differ, direct API examples, MCP setup, and every available tool.
+- Free endpoint checks
+- Agentic pay-per-use with x402-compatible clients or an xpay proxy
+- Team API-key billing with a monthly subscription
+
+This guide covers what Ground Truth verifies, how the access modes differ, direct API examples, MCP setup, and every available tool.
 
 ---
 
@@ -15,17 +19,20 @@ This guide covers what Ground Truth verifies, how Free and Pro differ, direct AP
 Ground Truth helps agents verify:
 
 - Pricing claims
+- Pricing comparisons
+- Compliance posture
+- Security posture
 - Competitor existence
 - API endpoints
 - Package comparisons
 - Market assumptions
 - Support and policy claims
 
-If the answer depends on live data, Ground Truth is designed to check it first.
+If the answer depends on live public data, Ground Truth is designed to check it first.
 
 ---
 
-## Free vs Pro
+## Access Modes
 
 ### Free
 
@@ -36,16 +43,25 @@ Free tier includes limited monthly endpoint checks.
 - Tracked by Cloudflare client IP in production, or `X-Anonymous-Client-Id` for local/dev testing
 - No API key required for the free endpoint check
 
-### Pro
+### Agentic pay-per-use
 
-Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.
+Paid tools also support agentic pay-per-use.
+
+- Use an x402-compatible MCP client, or put an xpay proxy in front of the live `/mcp` URL
+- Tool pricing starts at `$0.01` per call and varies by tool
+- Best for autonomous agents and variable workloads
+- Includes every paid verification tool
+
+### Team
+
+Team billing uses a monthly subscription and `X-API-Key`.
 
 - Requires `X-API-Key` with active billing
 - Default quota of 5,000 requests per calendar month
 - Monthly usage tracked per API key and tool
-- Includes `check_pricing`, `verify_claim`, `estimate_market`, `compare_competitors`, and `test_hypothesis`
+- Includes every paid verification tool
 
-To use Pro, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing) and send your key in `X-API-Key`.
+To use the team plan, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing) and send your key in `X-API-Key`.
 
 ---
 
@@ -54,6 +70,8 @@ To use Pro, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pricing](htt
 ### Direct API with `curl`
 
 Verify a pricing claim:
+
+These examples use the team plan with `X-API-Key`. For agentic pay-per-use, use an x402-capable MCP client or an xpay proxy.
 
 ```bash
 SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
@@ -171,6 +189,35 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   }'
 ```
 
+### Unpaid paid-tool request
+
+Call a paid tool without `X-API-Key` to get x402 payment metadata back from MCP:
+
+```bash
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "estimate_market",
+      "arguments": {
+        "query": "edge orm",
+        "registry": "npm"
+      }
+    },
+    "id": 2
+  }'
+```
+
+Expected behavior:
+
+- HTTP status stays `200`
+- The MCP result includes `_meta["x402/error"]`
+- The error payload includes `PAYMENT_REQUIRED` plus accepted payment requirements
+
 ---
 
 ## Limits and Access Rules
@@ -179,11 +226,12 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
 - Free access is limited to 100 requests per calendar month
 - Free usage is tracked by Cloudflare client IP in production, or `X-Anonymous-Client-Id` for local/dev testing
 - Free requests over the monthly limit return `429`
-- Pro tool calls require `X-API-Key`
-- Missing or invalid Pro keys return `401`
-- Inactive billing returns `402`
-- Pro usage over the monthly limit returns `429`
-- The default Pro monthly quota is 5,000 tool requests per API key
+- Paid tools can be accessed with either a valid team API key or an x402 payment
+- Missing or invalid team keys return `401` when you explicitly send `X-API-Key`
+- Inactive team billing returns `402`
+- Team usage over the monthly limit returns `429`
+- The default team monthly quota is 5,000 tool requests per API key
+- Unpaid agentic requests return MCP payment metadata rather than an HTTP auth error
 
 For local testing, `X-Anonymous-Client-Id` is the easiest way to simulate separate anonymous clients.
 
@@ -194,6 +242,12 @@ For local testing, `X-Anonymous-Client-Id` is the easiest way to simulate separa
 Ground Truth can also be used through MCP clients like Claude Desktop and Cursor.
 
 MCP means [Model Context Protocol](https://modelcontextprotocol.io), the standard many AI apps use to call external tools.
+
+If you want turnkey pay-per-tool billing without changing your client, register the live MCP URL with xpay and share the proxy URL instead.
+
+The server also publishes a metadata card at:
+
+`https://ground-truth-mcp.anishdasmail.workers.dev/.well-known/mcp/server-card.json`
 
 ### Claude Desktop
 
@@ -240,6 +294,42 @@ Add to `.cursor/mcp.json` or `~/.cursor/mcp.json`:
   "name": "check_pricing",
   "arguments": {
     "url": "https://notion.so/pricing"
+  }
+}
+```
+
+### Compare vendor pricing pages
+
+```json
+{
+  "name": "compare_pricing_pages",
+  "arguments": {
+    "pages": [
+      { "name": "Vendor A", "url": "https://example.com/pricing" },
+      { "name": "Vendor B", "url": "https://example.org/pricing" }
+    ]
+  }
+}
+```
+
+### Scan a trust page
+
+```json
+{
+  "name": "assess_compliance_posture",
+  "arguments": {
+    "url": "https://example.com/security"
+  }
+}
+```
+
+### Inspect public security headers
+
+```json
+{
+  "name": "inspect_security_headers",
+  "arguments": {
+    "url": "https://example.com"
   }
 }
 ```
@@ -327,7 +417,7 @@ Returns status, response time, content type, auth signal, rate-limit signal, and
 
 ---
 
-### `estimate_market` (Pro)
+### `estimate_market` (Paid)
 
 Checks whether competitors or alternatives exist by searching npm or PyPI.
 
@@ -340,7 +430,7 @@ Returns total result count plus top matches with version and description data.
 
 ---
 
-### `check_pricing` (Pro)
+### `check_pricing` (Paid)
 
 Extracts prices and plan signals from a live pricing page.
 
@@ -352,7 +442,31 @@ Returns prices found, plan names, free-option signals, free-trial signals, and c
 
 ---
 
-### `compare_competitors` (Pro)
+### `inspect_security_headers` (Paid)
+
+Checks common browser-facing security headers on a public URL.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `url` | string | Yes | The URL to inspect |
+
+Returns individual header presence, a summary score, and missing recommended headers.
+
+---
+
+### `compare_pricing_pages` (Paid)
+
+Compares 2 to 5 pricing pages side by side.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pages` | array | Yes | Objects containing `name` and `url` |
+
+Returns normalized pricing signals for each page plus an aggregate summary.
+
+---
+
+### `compare_competitors` (Paid)
 
 Compares 2 to 10 packages side by side.
 
@@ -365,7 +479,7 @@ Returns version, description, license, publish dates, keywords, and found/not-fo
 
 ---
 
-### `verify_claim` (Pro)
+### `verify_claim` (Paid)
 
 Checks whether live sources support or contradict a claim.
 
@@ -379,7 +493,19 @@ Returns per-source support data plus an overall verdict.
 
 ---
 
-### `test_hypothesis` (Pro)
+### `assess_compliance_posture` (Paid)
+
+Scans a trust or security page for enterprise compliance signals.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `url` | string | Yes | The trust, security, or compliance page URL |
+
+Returns matched signals such as SOC 2, GDPR, HIPAA, SSO, SCIM, and DPA mentions.
+
+---
+
+### `test_hypothesis` (Paid)
 
 Runs structured pass/fail checks against a market or product assumption.
 
@@ -399,11 +525,11 @@ Supported test types:
 
 ---
 
-## Authentication
+## Authentication and Billing
 
-Pro requests use the `X-API-Key` header.
+### Team API-key mode
 
-Example:
+Team requests use the `X-API-Key` header.
 
 ```bash
 -H "X-API-Key: gt_live_your_key_here"
@@ -411,7 +537,17 @@ Example:
 
 API keys start with `gt_live_`.
 
-By default, an active Pro key can make 5,000 tool requests per calendar month.
+By default, an active team key can make 5,000 tool requests per calendar month.
+
+### Agentic pay-per-use mode
+
+Agentic requests do not need `X-API-Key`.
+
+- A paid tool first returns `_meta["x402/error"]` with payment requirements
+- The client or proxy pays and retries with `_meta["x402/payment"]`
+- Successful paid responses include `_meta["x402/payment-response"]`
+
+Use [test-x402-payment.mjs](./test-x402-payment.mjs) for an opt-in end-to-end payment test.
 
 ---
 
@@ -420,11 +556,11 @@ By default, an active Pro key can make 5,000 tool requests per calendar month.
 Use [test-usage-enforcement.sh](./test-usage-enforcement.sh) for lightweight request checks covering:
 
 1. Free `check_endpoint` works
-2. Free user calling a Pro tool is blocked
-3. Invalid API key is rejected
-4. Inactive subscription is rejected
-5. Quota exceeded returns `429`
-6. Active Pro key can call all tools
+2. Unpaid paid-tool requests return MCP payment metadata
+3. Invalid team API key is rejected
+4. Inactive team subscription is rejected
+5. Free quota exceeded returns `429`
+6. Active team key can call all paid tools
 
 ---
 
@@ -432,9 +568,10 @@ Use [test-usage-enforcement.sh](./test-usage-enforcement.sh) for lightweight req
 
 | Status | Meaning | What to do |
 |---|---|---|
-| `401` | Missing or invalid API key | Add `X-API-Key` or check that the key is valid |
-| `402` | Billing inactive | Reactivate billing for the API key or get a new one at `/pricing` |
-| `429` | Monthly quota exceeded | Wait for the next calendar month or upgrade/reactivate as needed |
+| `200` | Unpaid agentic paid-tool request | Read `_meta["x402/error"]` and pay via an x402 client or xpay proxy |
+| `401` | Missing or invalid explicit team API key | Add a valid `X-API-Key` or remove it and use agentic pay-per-use |
+| `402` | Team billing inactive | Reactivate the subscription for the API key or get a new one at `/pricing` |
+| `429` | Monthly quota exceeded | Wait for the next calendar month or use the other billing mode |
 | `404` | Tool not found | Check the tool name spelling |
 
 ---
@@ -452,17 +589,17 @@ Use [test-usage-enforcement.sh](./test-usage-enforcement.sh) for lightweight req
 - Test a market assumption before shipping a strategy doc
 - Check whether a competitor exists before saying the category is open
 - Compare package popularity before making a stack decision
+- Compare pricing pages before repeating vendor positioning
 
-### Legal
+### Compliance
 
-- Confirm whether a support or policy claim is still true on the live site
-- Check public terms and pricing pages before quoting them internally
+- Scan trust pages for SOC 2, GDPR, HIPAA, DPA, SSO, and SCIM signals
+- Check public terms, trust, and pricing pages before quoting them internally
 
-### Market research
+### Security and vendor diligence
 
-- Count competitors in a category
-- Compare pricing across live public pages
-- Turn assumptions into structured pass/fail checks
+- Inspect browser-facing security headers before making a security claim
+- Compare vendors with live pricing, compliance, and public-security checks
 
 ---
 

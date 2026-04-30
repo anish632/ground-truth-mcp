@@ -37,7 +37,7 @@ Then use it in any Claude Code session:
 | | MCP Server | Claude Code Skill |
 |---|---|---|
 | **Setup** | Connect to remote URL | Copy one file |
-| **Cost** | Free tier + $9/mo Pro | Free (uses your Claude subscription) |
+| **Cost** | Free endpoint checks, pay-per-use, or $9/mo team plan | Free (uses your Claude subscription) |
 | **Callable by other agents** | Yes (via MCP) | No (session-only) |
 | **Pricing extraction** | Regex patterns | Semantic reading — more accurate |
 | **Claim verification** | Keyword hit-rate | Claude reads and reasons about the page |

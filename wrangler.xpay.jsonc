@@ -1,0 +1,30 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "ground-truth-mcp-xpay",
+	"main": "./src/index.ts",
+	"compatibility_date": "2026-01-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"vars": {
+		"GROUND_TRUTH_DEPLOYMENT_MODE": "xpay_upstream"
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "MCP_OBJECT",
+				"class_name": "GroundTruthMCP"
+			}
+		]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "API_KEYS",
+			"id": "17cb68041ac949a28da18b251fd39245"
+		}
+	],
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["GroundTruthMCP"]
+		}
+	]
+}

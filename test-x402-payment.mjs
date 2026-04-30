@@ -1,31 +1,25 @@
 #!/usr/bin/env node
 /**
- * Legacy x402 Payment End-to-End Test
+ * Ground Truth x402 Payment End-to-End Test
  *
- * This script preserves the older x402 payment flow test.
+ * This script exercises the current agentic pay-per-use path.
  *
- * Ground Truth now enforces Pro access at the /mcp gateway with API keys and
- * billing status checks before paid tool execution. That means this script is
- * no longer the primary access test for the current product behavior.
+ * Use `test-usage-enforcement.sh` for the broader free and team-plan checks.
+ * Use this script when you specifically want to verify the direct x402 loop:
  *
- * Use `test-usage-enforcement.sh` for the current Free vs Pro enforcement flow.
- *
- * If you still want to exercise the older x402 path against a gateway that
- * allows it, set ALLOW_LEGACY_X402_TEST=true before running this script.
- *
- * Legacy flow:
- *   1. Initialize MCP session (get session ID)
- *   2. List tools (verify free + paid annotations)
- *   3. Call free tool (check_endpoint)
- *   4. Call paid tool → get x402 error in _meta
- *   5. Sign EIP-3009 USDC authorization on Base Sepolia
- *   6. Retry with payment token in _meta → get tool result
+ *   1. Initialize MCP session
+ *   2. List tools and verify paid metadata
+ *   3. Call a free tool
+ *   4. Call a paid tool and receive x402 payment requirements
+ *   5. Sign an EIP-3009 USDC authorization
+ *   6. Retry with payment token and receive the paid result
  *
  * Usage:
- *   PRIVATE_KEY=0x... node test-x402-payment.mjs [url]
+ *   ALLOW_X402_TEST=true PRIVATE_KEY=0x... node test-x402-payment.mjs [url]
  *
  * Requirements:
- *   - A Base Sepolia wallet with test USDC (get from faucet.circle.com)
+ *   - A wallet funded for the server's configured network
+ *   - For the default local/test setup, Base Sepolia test USDC
  *   - The wallet's private key as an env var
  */
 
@@ -37,13 +31,13 @@ import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
 const SERVER_URL =
   process.argv[2] || "https://ground-truth-mcp.anishdasmail.workers.dev/mcp";
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
-const ALLOW_LEGACY_X402_TEST = process.env.ALLOW_LEGACY_X402_TEST === "true";
+const ALLOW_X402_TEST =
+  process.env.ALLOW_X402_TEST === "true" || process.env.ALLOW_LEGACY_X402_TEST === "true";
 
-if (!ALLOW_LEGACY_X402_TEST) {
-  console.log("Legacy x402 test is disabled by default.");
-  console.log("Ground Truth now requires API-key-based Pro access at the /mcp gateway.");
-  console.log("Use ./test-usage-enforcement.sh for current billing and quota checks.");
-  console.log("Set ALLOW_LEGACY_X402_TEST=true to run the legacy x402 flow.");
+if (!ALLOW_X402_TEST) {
+  console.log("x402 payment test is disabled by default.");
+  console.log("Use ./test-usage-enforcement.sh for free and team-plan billing checks.");
+  console.log("Set ALLOW_X402_TEST=true to run the agentic pay-per-use flow.");
   process.exit(0);
 }
 
@@ -197,7 +191,7 @@ async function testPaidTool() {
 
   const x402Error = data?.result?._meta?.["x402/error"];
   if (!x402Error || x402Error.error !== "PAYMENT_REQUIRED") {
-    console.log("  Tool returned without requiring payment — x402 gate may not be active");
+    console.log("  Tool returned without requiring payment. x402 may be disabled on this deployment.");
     console.log("  Response:", JSON.stringify(data?.result).slice(0, 300));
     return false;
   }
@@ -319,8 +313,8 @@ async function main() {
 
   if (!paidOk) {
     console.log("\nPaid tool test may fail if:");
-    console.log("  1. Your wallet has no test USDC (get from faucet.circle.com)");
-    console.log("  2. The x402 facilitator at x402.org is down");
+    console.log("  1. Your wallet has no funds for the configured payment network");
+    console.log("  2. The configured x402 facilitator is down or unreachable");
     console.log("  3. EIP-3009 authorization signing failed");
     console.log("\nGetting PAYMENT_REQUIRED confirms the payment gate works.");
     console.log("Getting past it confirms the full USDC payment loop.");

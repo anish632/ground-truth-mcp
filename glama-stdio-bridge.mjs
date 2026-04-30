@@ -27,7 +27,7 @@ async function main() {
 
   const client = new Client({
     name: "ground-truth-glama-bridge",
-    version: "0.3.1",
+    version: "0.4.0",
   });
 
   client.onerror = (error) => log("Upstream client error", error instanceof Error ? error.message : String(error));
@@ -42,7 +42,7 @@ async function main() {
   const server = new Server(
     {
       name: upstreamInfo?.name || "ground-truth",
-      version: upstreamInfo?.version || "0.3.1",
+      version: upstreamInfo?.version || "0.4.0",
     },
     {
       capabilities: {

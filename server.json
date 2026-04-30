@@ -1,16 +1,21 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.anish632/ground-truth",
-  "description": "Read-only verification tools for AI agents: endpoint reachability, pricing-page scans, evidence-backed claim checks, package-market sizing, named package comparisons, and multi-step hypothesis tests against live public data.",
-  "version": "0.3.1",
-  "repository": {
-    "url": "https://github.com/anish632/ground-truth-mcp",
-    "source": "github"
-  },
+  "title": "Ground Truth",
+  "description": "Verification layer for AI agents: endpoint, pricing, compliance, security, and claim checks.",
+  "version": "0.4.0",
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "description": "Optional team-plan API key. Omit this header to use the free endpoint check or agentic x402/xpay pay-per-use for paid tools.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
     }
   ]
 }

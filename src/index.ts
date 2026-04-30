@@ -1,6 +1,8 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { withX402, type X402Config } from "agents/x402";
+import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
+import type { PaymentRequirements } from "@x402/core/types";
+import { registerExactEvmScheme } from "@x402/evm/exact/server";
 import { z } from "zod";
 
 // --- Environment bindings ---
@@ -15,20 +17,795 @@ interface Env extends Cloudflare.Env {
   API_KEYS: KVNamespace;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
+  STRIPE_PRICE_ID?: string;
 }
 
 // --- Cache types ---
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_CACHEABLE_BODY_BYTES = 512 * 1024;
+const PAID_RESULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
-const SERVER_VERSION = "0.3.1";
+const SERVER_VERSION = "0.4.0";
 
 // --- Free tier tools ---
 const FREE_TOOLS = ["check_endpoint"];
 const FREE_MONTHLY_LIMIT = 100;
 const PRO_MONTHLY_LIMIT = 5000;
+const TEAM_PLAN_MONTHLY_PRICE_USD = 9;
+const DEFAULT_STRIPE_PRICE_ID = "price_1TD5jiKOR3CPCI6H5nBr8KV8";
+const XPAY_UPSTREAM_HEADER = "X-Ground-Truth-Xpay-Secret";
+const PUBLIC_APP_ORIGIN = "https://ground-truth-mcp.anishdasmail.workers.dev";
+const SERVER_CARD_ICON_PATH = "/icon.svg";
+const SERVER_CARD_DESCRIPTION =
+  "Live verification tools for AI agents: endpoint checks, pricing analysis, " +
+  "security headers, compliance signals, claim checks, and evidence-backed " +
+  "competitive research against public web data.";
+
+const AGENTIC_TOOL_PRICES_USD = {
+  estimate_market: 0.01,
+  check_pricing: 0.02,
+  inspect_security_headers: 0.02,
+  compare_competitors: 0.03,
+  compare_pricing_pages: 0.04,
+  verify_claim: 0.05,
+  test_hypothesis: 0.05,
+  assess_compliance_posture: 0.05,
+} as const;
+
+const PAID_TOOLS = Object.keys(AGENTIC_TOOL_PRICES_USD);
+const DEFAULT_X402_RECIPIENT = "0xB04BD750b67e7b00c95eAC8995eb9F8441309196";
+const DEFAULT_X402_TESTNET_FACILITATOR_URL = "https://x402.org/facilitator";
+const DEFAULT_X402_MAINNET_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402";
+
+function normalizeX402Network(network: string): string {
+  switch (network) {
+    case "base-sepolia":
+      return "eip155:84532";
+    case "base":
+      return "eip155:8453";
+    case "ethereum":
+      return "eip155:1";
+    case "sepolia":
+      return "eip155:11155111";
+    default:
+      return network;
+  }
+}
+
+function getDefaultFacilitatorUrl(network: string): string {
+  return network === "eip155:8453"
+    ? DEFAULT_X402_MAINNET_FACILITATOR_URL
+    : DEFAULT_X402_TESTNET_FACILITATOR_URL;
+}
+
+const X402_PAYMENT_ENABLED = workerProcess?.env?.GROUND_TRUTH_AGENTIC_PAYMENTS !== "false";
+const DEPLOYMENT_MODE = workerProcess?.env?.GROUND_TRUTH_DEPLOYMENT_MODE ?? "primary";
+const IS_XPAY_UPSTREAM = DEPLOYMENT_MODE === "xpay_upstream";
+const XPAY_UPSTREAM_SECRET = workerProcess?.env?.GROUND_TRUTH_XPAY_UPSTREAM_SECRET?.trim();
+const XPAY_UPSTREAM_PATH_SECRET = workerProcess?.env?.GROUND_TRUTH_XPAY_UPSTREAM_PATH_SECRET?.trim();
+const X402_NETWORK = normalizeX402Network(
+  workerProcess?.env?.GROUND_TRUTH_X402_NETWORK ??
+    workerProcess?.env?.X402_NETWORK ??
+    "base-sepolia",
+) as `${string}:${string}`;
+const X402_RECIPIENT = (workerProcess?.env?.GROUND_TRUTH_X402_RECIPIENT ??
+  workerProcess?.env?.X402_RECIPIENT ??
+  DEFAULT_X402_RECIPIENT) as `0x${string}`;
+const X402_FACILITATOR_URL = workerProcess?.env?.GROUND_TRUTH_X402_FACILITATOR_URL ??
+  workerProcess?.env?.X402_FACILITATOR_URL ??
+  getDefaultFacilitatorUrl(X402_NETWORK);
+
+const x402PaymentServer = (() => {
+  const resourceServer = new x402ResourceServer(
+    new HTTPFacilitatorClient({ url: X402_FACILITATOR_URL }),
+  );
+  registerExactEvmScheme(resourceServer);
+  return resourceServer;
+})();
+
+let x402InitializedPromise: Promise<void> | null = null;
+const x402RequirementsCache = new Map<string, Promise<PaymentRequirements[]>>();
+const SERVER_CARD_READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+const SERVER_CARD_TOOLS = [
+  {
+    name: "check_endpoint",
+    title: "Endpoint Reachability Check",
+    description:
+      "Perform one live, unauthenticated fetch against a public URL or API " +
+      "endpoint and report status, content type, timing, and likely auth or " +
+      "rate-limit signals.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        url: {
+          type: "string",
+          description:
+            "Public http(s) URL or bare domain to probe. Bare domains like " +
+            "google.com are normalized to https:// automatically.",
+        },
+      },
+      required: ["url"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        inputUrl: {
+          type: "string",
+          description:
+            "Original user input when normalization changed it, for example " +
+            "when https:// was added.",
+        },
+        url: {
+          type: "string",
+          description: "Normalized URL that was actually fetched.",
+        },
+        accessible: {
+          type: "boolean",
+          description: "True when the endpoint returned a 2xx HTTP status.",
+        },
+        status: {
+          type: "integer",
+          description:
+            "HTTP status code returned by the endpoint, when a response was received.",
+        },
+        contentType: {
+          type: ["string", "null"],
+          description: "Response Content-Type header, if present.",
+        },
+        responseTimeMs: {
+          type: "integer",
+          description: "Elapsed request time in milliseconds.",
+        },
+        authRequired: {
+          type: "boolean",
+          description:
+            "True when the server responded with 401 or 403, which usually means credentials are required.",
+        },
+        rateLimited: {
+          type: "boolean",
+          description: "True when the server responded with 429 Too Many Requests.",
+        },
+        sampleResponse: {
+          type: "string",
+          description: "First 1,000 characters of the response body for quick inspection.",
+        },
+        error: {
+          type: "string",
+          description: "Validation or network error when the request could not be completed.",
+        },
+      },
+      required: ["url", "accessible"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+  {
+    name: "estimate_market",
+    title: "Package Market Search",
+    description:
+      "Search npm or PyPI to estimate how crowded a package category is " +
+      "before you claim that a market is empty, niche, or competitive.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: {
+          type: "string",
+          description:
+            "Short registry search phrase to evaluate, for example 'mcp memory server' or 'edge orm'.",
+        },
+        registry: {
+          type: "string",
+          enum: ["npm", "pypi"],
+          description:
+            "Registry to search. Use 'npm' for JavaScript ecosystems and 'pypi' for Python ecosystems.",
+        },
+      },
+      required: ["query"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: { type: "string", description: "Search phrase that was evaluated." },
+        registry: {
+          type: "string",
+          enum: ["npm", "pypi"],
+          description: "Registry that was searched.",
+        },
+        totalResults: {
+          type: ["integer", "null"],
+          description: "Total number of matching packages reported by the registry search.",
+        },
+        topResults: {
+          type: "array",
+          description:
+            "Representative top search matches that help interpret the market count.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string", description: "Package name returned by the registry." },
+              description: {
+                type: "string",
+                description: "Short package summary from registry metadata.",
+              },
+              version: {
+                type: "string",
+                description: "Latest version string returned in the result payload.",
+              },
+              score: {
+                type: "string",
+                description: "Registry relevance score when npm provides one.",
+              },
+            },
+            required: ["name", "description", "version"],
+          },
+        },
+      },
+      required: ["query", "registry", "totalResults", "topResults"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+  {
+    name: "check_pricing",
+    title: "Pricing Page Scan",
+    description:
+      "Fetch a public pricing page and extract first-pass pricing signals " +
+      "before you quote plan costs, free tiers, or plan names.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        url: {
+          type: "string",
+          description:
+            "Public pricing or plans URL to analyze. Prefer the specific pricing page rather than a generic homepage.",
+        },
+      },
+      required: ["url"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        url: { type: "string", description: "Pricing page that was analyzed." },
+        cached: {
+          type: "boolean",
+          description: "True when the page body came from the 5-minute cache.",
+        },
+        pricesFound: {
+          type: "array",
+          description:
+            "Distinct price-like strings extracted from the page text.",
+          items: { type: "string" },
+        },
+        plansDetected: {
+          type: "array",
+          description:
+            "Lowercased heuristic plan labels detected from the page text.",
+          items: { type: "string" },
+        },
+        hasFreeOption: {
+          type: "boolean",
+          description: "True when the page contains signals that a free plan or $0 option exists.",
+        },
+        hasFreeTrial: {
+          type: "boolean",
+          description: "True when the page contains signals that a free trial exists.",
+        },
+        pageLength: {
+          type: "integer",
+          description: "Size of the fetched page body in characters.",
+        },
+        error: {
+          type: "string",
+          description: "Fetch or parsing error when the pricing page could not be analyzed.",
+        },
+      },
+      required: ["url"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+  {
+    name: "inspect_security_headers",
+    title: "Security Header Inspection",
+    description:
+      "Fetch a public URL and inspect security-relevant response headers " +
+      "before you claim that a product or endpoint has a strong browser-facing baseline.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        url: {
+          type: "string",
+          description:
+            "Public http(s) URL or bare domain to inspect. Bare domains are normalized to https:// automatically.",
+        },
+      },
+      required: ["url"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        inputUrl: {
+          type: "string",
+          description: "Original user input when normalization changed it.",
+        },
+        url: { type: "string", description: "Normalized URL that was fetched." },
+        accessible: {
+          type: "boolean",
+          description: "True when the endpoint returned an HTTP response.",
+        },
+        status: {
+          type: "integer",
+          description: "HTTP status code returned by the endpoint.",
+        },
+        https: {
+          type: "boolean",
+          description: "True when the normalized URL used https.",
+        },
+        presentCount: {
+          type: "integer",
+          description: "Number of tracked security headers that were present.",
+        },
+        score: {
+          type: "string",
+          enum: ["strong", "moderate", "weak"],
+          description:
+            "Heuristic security-header score based on how many tracked headers were present.",
+        },
+        headers: {
+          type: "object",
+          additionalProperties: false,
+          description: "Tracked response headers and their raw values when present.",
+          properties: {
+            strictTransportSecurity: { type: ["string", "null"] },
+            contentSecurityPolicy: { type: ["string", "null"] },
+            xFrameOptions: { type: ["string", "null"] },
+            referrerPolicy: { type: ["string", "null"] },
+            permissionsPolicy: { type: ["string", "null"] },
+            xContentTypeOptions: { type: ["string", "null"] },
+            crossOriginOpenerPolicy: { type: ["string", "null"] },
+            crossOriginResourcePolicy: { type: ["string", "null"] },
+          },
+        },
+        missingRecommended: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tracked headers that were not present on the response.",
+        },
+        error: {
+          type: "string",
+          description: "Validation or network error when the request could not be completed.",
+        },
+      },
+      required: ["url", "accessible", "https"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+  {
+    name: "compare_pricing_pages",
+    title: "Pricing Page Comparison",
+    description:
+      "Compare two to five public pricing pages side by side before you " +
+      "make competitive pricing or packaging claims.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        pages: {
+          type: "array",
+          minItems: 2,
+          maxItems: 5,
+          description: "Two to five named pricing pages to compare side by side.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: {
+                type: "string",
+                description: "Short vendor or product label to use in the comparison output.",
+              },
+              url: {
+                type: "string",
+                description: "Public pricing page URL for that vendor or product.",
+              },
+            },
+            required: ["name", "url"],
+          },
+        },
+      },
+      required: ["pages"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        pages: {
+          type: "array",
+          description: "Per-page pricing signals returned in input order.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string" },
+              url: { type: "string" },
+              cached: { type: "boolean" },
+              pricesFound: { type: "array", items: { type: "string" } },
+              plansDetected: { type: "array", items: { type: "string" } },
+              hasFreeOption: { type: "boolean" },
+              hasFreeTrial: { type: "boolean" },
+              pageLength: { type: "integer" },
+              error: { type: "string" },
+            },
+            required: ["name", "url"],
+          },
+        },
+        summary: {
+          type: "object",
+          additionalProperties: false,
+          description: "Aggregate counts across all compared pricing pages.",
+          properties: {
+            pagesCompared: { type: "integer" },
+            pagesWithVisiblePrices: { type: "integer" },
+            pagesWithFreeOption: { type: "integer" },
+            pagesWithFreeTrial: { type: "integer" },
+          },
+          required: [
+            "pagesCompared",
+            "pagesWithVisiblePrices",
+            "pagesWithFreeOption",
+            "pagesWithFreeTrial",
+          ],
+        },
+      },
+      required: ["pages", "summary"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+  {
+    name: "compare_competitors",
+    title: "Named Package Comparison",
+    description:
+      "Compare two or more exact package names side by side using live npm " +
+      "or PyPI metadata.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        packages: {
+          type: "array",
+          minItems: 2,
+          maxItems: 10,
+          description:
+            "Two to ten exact package names from the same registry. Use exact registry names, not search phrases.",
+          items: { type: "string" },
+        },
+        registry: {
+          type: "string",
+          enum: ["npm", "pypi"],
+          description:
+            "Registry that all package names belong to. Returned metadata fields differ slightly between npm and PyPI.",
+        },
+      },
+      required: ["packages"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        packages: {
+          type: "array",
+          items: { type: "string" },
+          description: "Package names that were requested for comparison.",
+        },
+        registry: {
+          type: "string",
+          enum: ["npm", "pypi"],
+          description: "Registry used for all comparisons.",
+        },
+        comparisons: {
+          type: "array",
+          description: "Per-package lookup results returned in input order.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              name: { type: "string" },
+              found: { type: "boolean" },
+              description: { type: "string" },
+              latestVersion: { type: "string" },
+              license: { type: ["string", "null"] },
+              lastPublished: { type: ["string", "null"] },
+              created: { type: ["string", "null"] },
+              totalVersions: { type: "integer" },
+              author: { type: "string" },
+              keywords: { type: "array", items: { type: "string" } },
+              cached: { type: "boolean" },
+              error: { type: "string" },
+            },
+            required: ["name", "found"],
+          },
+        },
+      },
+      required: ["packages", "registry", "comparisons"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+  {
+    name: "verify_claim",
+    title: "Claim Support Check",
+    description:
+      "Check whether a factual claim is supported by a specific set of " +
+      "public evidence URLs that you already have.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        claim: {
+          type: "string",
+          description:
+            "Plain-language claim to verify, for example 'AWS Business support includes 24/7 phone support'.",
+        },
+        evidence_urls: {
+          type: "array",
+          minItems: 1,
+          maxItems: 10,
+          description:
+            "One to ten public documentation, pricing, policy, or support URLs that are likely to contain direct evidence for the claim.",
+          items: { type: "string" },
+        },
+        keywords: {
+          type: "array",
+          minItems: 1,
+          maxItems: 20,
+          description:
+            "Keywords or short phrases that should appear on supporting pages.",
+          items: { type: "string" },
+        },
+      },
+      required: ["claim", "evidence_urls", "keywords"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        claim: { type: "string", description: "Claim that was evaluated." },
+        sources: {
+          type: "array",
+          description: "Per-source evidence results.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              url: { type: "string" },
+              accessible: { type: "boolean" },
+              cached: { type: "boolean" },
+              keywordsMatched: { type: "array", items: { type: "string" } },
+              keywordsTotal: { type: "integer" },
+              matchRatio: { type: "number" },
+              supports: { type: "boolean" },
+              error: { type: "string" },
+            },
+            required: ["url", "accessible", "supports"],
+          },
+        },
+        verdict: {
+          type: "object",
+          additionalProperties: false,
+          description: "Aggregate verdict across all supplied sources.",
+          properties: {
+            supporting: { type: "integer" },
+            contradicting: { type: "integer" },
+            total: { type: "integer" },
+            confidence: { type: "number" },
+            summary: {
+              type: "string",
+              enum: ["CONFIRMED", "UNCONFIRMED", "LIKELY TRUE", "LIKELY FALSE"],
+            },
+          },
+          required: ["supporting", "contradicting", "total", "confidence", "summary"],
+        },
+      },
+      required: ["claim", "sources", "verdict"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+  {
+    name: "assess_compliance_posture",
+    title: "Compliance Signal Scan",
+    description:
+      "Scan a public security, trust, compliance, or legal page for common " +
+      "enterprise buying signals before you claim a vendor supports a particular posture.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        url: {
+          type: "string",
+          description: "Public trust, security, compliance, or policy URL to scan.",
+        },
+      },
+      required: ["url"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        url: { type: "string", description: "Compliance or trust page that was analyzed." },
+        cached: {
+          type: "boolean",
+          description: "True when the page body came from the 5-minute cache.",
+        },
+        matchedSignals: {
+          type: "array",
+          items: { type: "string" },
+          description: "Signal names that were detected on the page.",
+        },
+        signals: {
+          type: "object",
+          additionalProperties: false,
+          description:
+            "Boolean scan results for common enterprise compliance and security signals.",
+          properties: {
+            soc2: { type: "boolean" },
+            iso27001: { type: "boolean" },
+            gdpr: { type: "boolean" },
+            hipaa: { type: "boolean" },
+            dpa: { type: "boolean" },
+            subprocessorList: { type: "boolean" },
+            sso: { type: "boolean" },
+            scim: { type: "boolean" },
+            encryption: { type: "boolean" },
+            dataResidency: { type: "boolean" },
+          },
+          required: [
+            "soc2",
+            "iso27001",
+            "gdpr",
+            "hipaa",
+            "dpa",
+            "subprocessorList",
+            "sso",
+            "scim",
+            "encryption",
+            "dataResidency",
+          ],
+        },
+        pageLength: { type: "integer", description: "Size of the fetched page body in characters." },
+        error: {
+          type: "string",
+          description: "Fetch or parsing error when the page could not be analyzed.",
+        },
+      },
+      required: ["url"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+  {
+    name: "test_hypothesis",
+    title: "Multi-step Hypothesis Test",
+    description:
+      "Run a small verification plan made of concrete live checks and " +
+      "summarize whether a hypothesis is supported.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        hypothesis: {
+          type: "string",
+          description:
+            "Claim to test, for example 'there are fewer than 50 MCP email servers on npm'.",
+        },
+        tests: {
+          type: "array",
+          minItems: 1,
+          maxItems: 10,
+          description: "Ordered list of one to ten checks to run.",
+          items: {
+            type: "object",
+            description:
+              "One explicit check in the plan. Supported types are endpoint_exists, npm_count_above, npm_count_below, and response_contains.",
+          },
+        },
+      },
+      required: ["hypothesis", "tests"],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        hypothesis: { type: "string", description: "Hypothesis that was evaluated." },
+        tests: {
+          type: "array",
+          description: "Per-test execution results in input order.",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              description: { type: "string" },
+              type: {
+                type: "string",
+                enum: [
+                  "endpoint_exists",
+                  "npm_count_above",
+                  "npm_count_below",
+                  "response_contains",
+                ],
+              },
+              passed: { type: "boolean" },
+              actual: { type: ["string", "number", "null"] },
+            },
+            required: ["description", "type", "passed", "actual"],
+          },
+        },
+        verdict: {
+          type: "object",
+          additionalProperties: false,
+          description: "High-level verdict for the hypothesis.",
+          properties: {
+            passed: { type: "integer" },
+            failed: { type: "integer" },
+            summary: {
+              type: "string",
+              enum: ["SUPPORTED", "REFUTED", "PARTIALLY SUPPORTED"],
+            },
+          },
+          required: ["passed", "failed", "summary"],
+        },
+      },
+      required: ["hypothesis", "tests", "verdict"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
+];
+
+function ensureX402Initialized(): Promise<void> {
+  if (!x402InitializedPromise) {
+    x402InitializedPromise = x402PaymentServer.initialize().catch((error) => {
+      x402InitializedPromise = null;
+      throw error;
+    });
+  }
+
+  return x402InitializedPromise;
+}
+
+async function getX402PaymentRequirements(toolName: string): Promise<PaymentRequirements[]> {
+  const cached = x402RequirementsCache.get(toolName);
+  if (cached) return await cached;
+
+  const priceUSD = AGENTIC_TOOL_PRICES_USD[toolName as keyof typeof AGENTIC_TOOL_PRICES_USD];
+  const requirementsPromise = (async () => {
+    await ensureX402Initialized();
+    return await x402PaymentServer.buildPaymentRequirements({
+      scheme: "exact",
+      payTo: X402_RECIPIENT,
+      price: priceUSD,
+      network: X402_NETWORK,
+      maxTimeoutSeconds: 300,
+    });
+  })();
+
+  x402RequirementsCache.set(toolName, requirementsPromise);
+
+  try {
+    return await requirementsPromise;
+  } catch (error) {
+    x402RequirementsCache.delete(toolName);
+    throw error;
+  }
+}
 
 type ApiKeyRecord = Record<string, unknown> & {
   active?: boolean;
@@ -99,6 +876,177 @@ function structuredToolResult<T extends Record<string, unknown>>(structuredConte
       text: JSON.stringify(structuredContent, null, 2),
     }],
     structuredContent,
+  };
+}
+
+function getExtraHeader(
+  extra: unknown,
+  headerName: string,
+): string | undefined {
+  const headers = (extra as { requestInfo?: { headers?: Record<string, string | undefined> } } | undefined)
+    ?.requestInfo?.headers;
+  if (!headers) return undefined;
+
+  const target = headerName.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target && typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return undefined;
+}
+
+function getX402PaymentToken(extra: unknown): string | undefined {
+  const metaToken = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta?.["x402/payment"];
+  if (typeof metaToken === "string" && metaToken.trim()) return metaToken.trim();
+
+  return getExtraHeader(extra, "PAYMENT-SIGNATURE") ?? getExtraHeader(extra, "X-PAYMENT");
+}
+
+function hasTrustedXpaySecret(secret: string | null | undefined): boolean {
+  return IS_XPAY_UPSTREAM &&
+    typeof XPAY_UPSTREAM_SECRET === "string" &&
+    XPAY_UPSTREAM_SECRET.length > 0 &&
+    typeof secret === "string" &&
+    secret === XPAY_UPSTREAM_SECRET;
+}
+
+function getBearerToken(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const match = value.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim();
+}
+
+function isTrustedXpayRequest(request: Request): boolean {
+  return hasTrustedXpaySecret(request.headers.get(XPAY_UPSTREAM_HEADER)?.trim()) ||
+    hasTrustedXpaySecret(getBearerToken(request.headers.get("Authorization")));
+}
+
+function isTrustedXpayExtra(extra: unknown): boolean {
+  return hasTrustedXpaySecret(getExtraHeader(extra, XPAY_UPSTREAM_HEADER)) ||
+    hasTrustedXpaySecret(getBearerToken(getExtraHeader(extra, "Authorization")));
+}
+
+function hasTrustedXpayPath(url: URL): boolean {
+  if (
+    !IS_XPAY_UPSTREAM ||
+    typeof XPAY_UPSTREAM_PATH_SECRET !== "string" ||
+    XPAY_UPSTREAM_PATH_SECRET.length === 0
+  ) {
+    return false;
+  }
+
+  return url.pathname === `/mcp/${XPAY_UPSTREAM_PATH_SECRET}` ||
+    url.pathname === `/mcp-xpay-${XPAY_UPSTREAM_PATH_SECRET}`;
+}
+
+function hasTrustedXpayQuery(url: URL): boolean {
+  return IS_XPAY_UPSTREAM &&
+    typeof XPAY_UPSTREAM_PATH_SECRET === "string" &&
+    XPAY_UPSTREAM_PATH_SECRET.length > 0 &&
+    url.searchParams.get("xpay_secret") === XPAY_UPSTREAM_PATH_SECRET;
+}
+
+function isPublicXpayDiscoveryMethod(method: string | null): boolean {
+  return method === "initialize" ||
+    method === "notifications/initialized" ||
+    method === "tools/list";
+}
+
+function buildX402PaymentRequiredResult(
+  toolName: string,
+  description: string,
+  requirements: PaymentRequirements[],
+  reason = "PAYMENT_REQUIRED",
+  extraFields: Record<string, unknown> = {},
+) {
+  const payload = {
+    x402Version: 2,
+    error: reason,
+    resource: {
+      url: `x402://${toolName}`,
+      description,
+      mimeType: "application/json",
+    },
+    accepts: requirements,
+    ...extraFields,
+  };
+
+  return {
+    isError: true,
+    _meta: { "x402/error": payload },
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify(payload),
+    }],
+  };
+}
+
+function extractPricingSignals(body: string) {
+  const priceRegex = /\$\d[\d,]*(?:\.\d{2})?(?:\s*\/\s*(?:mo(?:nth)?|yr|year|user|seat|req|call|token))?/gi;
+  const pricesFound = [...new Set(body.match(priceRegex) || [])].slice(0, 20);
+  const planRegex = /(?:free|starter|basic|pro|premium|enterprise|business|team|hobby|growth|scale)\s*(?:plan|tier)?/gi;
+  const plansDetected = [...new Set((body.match(planRegex) || []).map((match) => match.trim().toLowerCase()))];
+
+  return {
+    pricesFound,
+    plansDetected,
+    hasFreeOption: /free\s*(?:plan|tier|forever|trial)|(?:\$0|0\.00)/i.test(body),
+    hasFreeTrial: /free\s*trial|try\s*(?:it\s*)?free|start\s*free/i.test(body),
+    pageLength: body.length,
+  };
+}
+
+const COMPLIANCE_SIGNAL_PATTERNS = {
+  soc2: /\bsoc\s*2\b|\bsoc2\b/i,
+  iso27001: /\biso\s*27001\b/i,
+  gdpr: /\bgdpr\b|\bgeneral data protection regulation\b/i,
+  hipaa: /\bhipaa\b/i,
+  dpa: /\bdata processing agreement\b|\bdpa\b/i,
+  subprocessorList: /\bsubprocessors?\b/i,
+  sso: /\bsingle sign-on\b|\bsso\b/i,
+  scim: /\bscim\b/i,
+  encryption: /\bencrypt(?:ion|ed)\b|\bat rest\b|\bin transit\b/i,
+  dataResidency: /\bdata residency\b|\bdata region\b|\bregion(?:al)? storage\b/i,
+} as const;
+
+function extractComplianceSignals(body: string) {
+  const signals = Object.fromEntries(
+    Object.entries(COMPLIANCE_SIGNAL_PATTERNS).map(([signal, pattern]) => [signal, pattern.test(body)]),
+  ) as Record<keyof typeof COMPLIANCE_SIGNAL_PATTERNS, boolean>;
+
+  const matchedSignals = Object.entries(signals)
+    .filter(([, matched]) => matched)
+    .map(([signal]) => signal);
+
+  return { signals, matchedSignals };
+}
+
+function getSecurityHeaderSummary(headers: Headers) {
+  const summary = {
+    strictTransportSecurity: headers.get("strict-transport-security"),
+    contentSecurityPolicy: headers.get("content-security-policy"),
+    xFrameOptions: headers.get("x-frame-options"),
+    referrerPolicy: headers.get("referrer-policy"),
+    permissionsPolicy: headers.get("permissions-policy"),
+    xContentTypeOptions: headers.get("x-content-type-options"),
+    crossOriginOpenerPolicy: headers.get("cross-origin-opener-policy"),
+    crossOriginResourcePolicy: headers.get("cross-origin-resource-policy"),
+  };
+
+  const presentCount = Object.values(summary).filter((value) => Boolean(value)).length;
+  const missingRecommended = Object.entries(summary)
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
+
+  const score = presentCount >= 6 ? "strong" : presentCount >= 3 ? "moderate" : "weak";
+
+  return {
+    headers: summary,
+    presentCount,
+    missingRecommended,
+    score,
   };
 }
 
@@ -354,9 +1302,9 @@ async function requireProAccess(
     return jsonError(
       401,
       "missing_api_key",
-      `Tool '${toolName}' requires a Pro API key.`,
+      `Tool '${toolName}' requires a team API key.`,
       {
-        tier: "pro",
+        tier: "team",
         tool: toolName,
       },
       requestId,
@@ -370,7 +1318,7 @@ async function requireProAccess(
       "invalid_api_key",
       "The provided API key is invalid.",
       {
-        tier: "pro",
+        tier: "team",
         tool: toolName,
       },
       requestId,
@@ -383,7 +1331,7 @@ async function requireProAccess(
       "billing_inactive",
       "Billing is inactive for this API key.",
       {
-        tier: "pro",
+        tier: "team",
         tool: toolName,
         subscriptionStatus: apiKeyRecord.subscriptionStatus ?? "inactive",
       },
@@ -401,9 +1349,9 @@ async function requireProAccess(
     return jsonError(
       429,
       "quota_exceeded",
-      `Pro monthly quota exceeded for ${month}.`,
+      `Team monthly quota exceeded for ${month}.`,
       {
-        tier: "pro",
+        tier: "team",
         tool: toolName,
         month,
         limit,
@@ -497,6 +1445,41 @@ async function cachedFetch(sql: SqlTagFn, url: string): Promise<{ body: string; 
   return { body, fromCache: false };
 }
 
+function paidResultCacheGet(sql: SqlTagFn, key: string): Record<string, unknown> | null {
+  const rows = sql<{ response: string; ts: number }>`SELECT response, ts FROM paid_result_cache WHERE key = ${key}`;
+  if (rows.length === 0) return null;
+
+  const row = rows[0];
+  if (Date.now() - row.ts > PAID_RESULT_CACHE_TTL_MS) {
+    sql`DELETE FROM paid_result_cache WHERE key = ${key}`;
+    return null;
+  }
+
+  try {
+    return JSON.parse(row.response) as Record<string, unknown>;
+  } catch {
+    sql`DELETE FROM paid_result_cache WHERE key = ${key}`;
+    return null;
+  }
+}
+
+function paidResultCacheSet(sql: SqlTagFn, key: string, response: Record<string, unknown>): void {
+  try {
+    sql`INSERT OR REPLACE INTO paid_result_cache (key, response, ts) VALUES (${key}, ${JSON.stringify(response)}, ${Date.now()})`;
+  } catch {
+    // Paid result caching should never block a tool response.
+  }
+}
+
+async function analyzePricingPage(sql: SqlTagFn, url: string) {
+  const { body, fromCache } = await cachedFetch(sql, url);
+  return {
+    url,
+    cached: fromCache,
+    ...extractPricingSignals(body),
+  };
+}
+
 // --- npm helpers ---
 interface NpmSearchResult {
   objects?: { package: { name: string; description?: string; version: string }; score?: { final?: number } }[];
@@ -536,20 +1519,15 @@ async function searchPyPI(sql: SqlTagFn, query: string): Promise<{ total: number
 
 // --- MCP Server ---
 export class GroundTruthMCP extends McpAgent<Env> {
-  server = withX402(
-    new McpServer({ name: "ground-truth", version: "0.3.1" }),
-    {
-      network: "base-sepolia",
-      recipient: "0xB04BD750b67e7b00c95eAC8995eb9F8441309196",
-      facilitator: { url: "https://x402.org/facilitator" },
-    } satisfies X402Config,
-  );
+  server = new McpServer({ name: "ground-truth", version: SERVER_VERSION });
 
   async init() {
     // Initialize cache table
     this.sql`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, data TEXT, ts INTEGER)`;
     // Initialize usage log table
     this.sql`CREATE TABLE IF NOT EXISTS usage_log (id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT, ts INTEGER, success INTEGER)`;
+    // Initialize paid-response cache for idempotent x402 retries
+    this.sql`CREATE TABLE IF NOT EXISTS paid_result_cache (key TEXT PRIMARY KEY, response TEXT, ts INTEGER)`;
     const sql = this.sql.bind(this) as SqlTagFn;
     const logUsage = (tool: string, success: boolean) => {
       try { 
@@ -567,6 +1545,148 @@ export class GroundTruthMCP extends McpAgent<Env> {
       idempotentHint: true,
       openWorldHint: true,
     } as const;
+
+    const toolServer = this.server as McpServer;
+    const registerPaidTool = (
+      name: string,
+      priceUSD: number,
+      config: Record<string, unknown>,
+      execute: (args: any, extra: unknown) => Promise<Record<string, unknown>>,
+    ) =>
+      (toolServer as unknown as {
+        registerTool: (toolName: string, toolConfig: Record<string, unknown>, callback: (args: any, extra: unknown) => Promise<Record<string, unknown>>) => unknown;
+      }).registerTool(
+        name,
+        {
+          ...config,
+          _meta: IS_XPAY_UPSTREAM
+            ? ((config as { _meta?: Record<string, unknown> })._meta ?? {})
+            : {
+              ...((config as { _meta?: Record<string, unknown> })._meta ?? {}),
+              "agents-x402/paymentRequired": true,
+              "agents-x402/priceUSD": priceUSD,
+            },
+        },
+        async (args, extra) => {
+          if (isTrustedXpayExtra(extra)) {
+            return await execute(args, extra);
+          }
+
+          const teamApiKey = getExtraHeader(extra, "X-API-Key");
+          if (teamApiKey) {
+            return await execute(args, extra);
+          }
+
+          if (!X402_PAYMENT_ENABLED) {
+            return {
+              isError: true,
+              content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                  error: "payment_disabled",
+                  message: "Agentic pay-per-use is disabled on this deployment. Use a team API key instead.",
+                }),
+              }],
+            };
+          }
+
+          let requirements: PaymentRequirements[];
+          try {
+            requirements = await getX402PaymentRequirements(name);
+          } catch {
+            return {
+              isError: true,
+              content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                  error: "payment_setup_failed",
+                  message: "Unable to compute x402 payment requirements for this tool.",
+                }),
+              }],
+            };
+          }
+
+          const description = typeof config.description === "string" ? config.description : name;
+          const paymentToken = getX402PaymentToken(extra);
+          if (!paymentToken) {
+            return buildX402PaymentRequiredResult(name, description, requirements);
+          }
+
+          const paidResultCacheKey = await sha256Hex(`x402:${name}:${paymentToken}`);
+          const cachedPaidResult = paidResultCacheGet(sql, paidResultCacheKey);
+          if (cachedPaidResult) {
+            return cachedPaidResult;
+          }
+
+          let paymentPayload: Record<string, unknown>;
+          try {
+            paymentPayload = JSON.parse(atob(paymentToken)) as Record<string, unknown>;
+          } catch {
+            return buildX402PaymentRequiredResult(name, description, requirements, "INVALID_PAYMENT");
+          }
+
+          const matchingRequirements = x402PaymentServer.findMatchingRequirements(requirements, paymentPayload as any);
+          if (!matchingRequirements) {
+            return buildX402PaymentRequiredResult(name, description, requirements, "INVALID_PAYMENT");
+          }
+
+          try {
+            const verification = await x402PaymentServer.verifyPayment(paymentPayload as any, matchingRequirements);
+            if (!verification.isValid) {
+              return buildX402PaymentRequiredResult(
+                name,
+                description,
+                requirements,
+                verification.invalidReason ?? "INVALID_PAYMENT",
+                verification.payer ? { payer: verification.payer } : {},
+              );
+            }
+          } catch {
+            return buildX402PaymentRequiredResult(name, description, requirements, "INVALID_PAYMENT");
+          }
+
+          let result: Record<string, unknown>;
+          try {
+            result = await execute(args, extra);
+          } catch (error) {
+            result = {
+              isError: true,
+              content: [{
+                type: "text" as const,
+                text: `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`,
+              }],
+            };
+          }
+
+          if (result.isError === true) {
+            return result;
+          }
+
+          try {
+            const settlement = await x402PaymentServer.settlePayment(paymentPayload as any, matchingRequirements);
+            if (!settlement.success) {
+              return buildX402PaymentRequiredResult(name, description, requirements, settlement.errorReason ?? "SETTLEMENT_FAILED");
+            }
+
+            const enrichedResult = {
+              ...result,
+              _meta: {
+                ...((result._meta as Record<string, unknown> | undefined) ?? {}),
+                "x402/payment-response": {
+                  success: true,
+                  transaction: settlement.transaction,
+                  network: settlement.network,
+                  payer: settlement.payer,
+                },
+              },
+            };
+            paidResultCacheSet(sql, paidResultCacheKey, enrichedResult);
+            return enrichedResult;
+          } catch {
+            return buildX402PaymentRequiredResult(name, description, requirements, "SETTLEMENT_FAILED");
+          }
+        },
+      );
 
     // ───────────────────────────────────────────────
     // FREE: check_endpoint
@@ -672,8 +1792,9 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     // PAID $0.01: estimate_market (npm + PyPI)
     // ───────────────────────────────────────────────
-    this.server.registerTool(
+    registerPaidTool(
       "estimate_market",
+      AGENTIC_TOOL_PRICES_USD.estimate_market,
       {
         title: "Package Market Search",
         description:
@@ -759,14 +1880,15 @@ export class GroundTruthMCP extends McpAgent<Env> {
           totalResults: 0,
           topResults: [],
         });
-      }
+      },
     );
 
     // ───────────────────────────────────────────────
     // PAID $0.02: check_pricing
     // ───────────────────────────────────────────────
-    this.server.registerTool(
+    registerPaidTool(
       "check_pricing",
+      AGENTIC_TOOL_PRICES_USD.check_pricing,
       {
         title: "Pricing Page Scan",
         description:
@@ -814,25 +1936,9 @@ export class GroundTruthMCP extends McpAgent<Env> {
       },
       async ({ url }) => {
         try {
-          const { body, fromCache } = await cachedFetch(sql, url);
-          // Extract pricing signals from page content
-          const priceRegex = /\$\d[\d,]*(?:\.\d{2})?(?:\s*\/\s*(?:mo(?:nth)?|yr|year|user|seat|req|call|token))?/gi;
-          const prices = [...new Set(body.match(priceRegex) || [])].slice(0, 20);
-          const planRegex = /(?:free|starter|basic|pro|premium|enterprise|business|team|hobby|growth|scale)\s*(?:plan|tier)?/gi;
-          const plans = [...new Set((body.match(planRegex) || []).map(p => p.trim().toLowerCase()))];
-          const hasFree = /free\s*(?:plan|tier|forever|trial)|(?:\$0|0\.00)/i.test(body);
-          const hasFreeTrial = /free\s*trial|try\s*(?:it\s*)?free|start\s*free/i.test(body);
-
+          const analysis = await analyzePricingPage(sql, url);
           logUsage("check_pricing", true);
-          return structuredToolResult({
-            url,
-            cached: fromCache,
-            pricesFound: prices,
-            plansDetected: plans,
-            hasFreeOption: hasFree,
-            hasFreeTrial: hasFreeTrial,
-            pageLength: body.length,
-          });
+          return structuredToolResult(analysis);
         } catch (e: unknown) {
           logUsage("check_pricing", false);
           return structuredToolResult({
@@ -840,14 +1946,206 @@ export class GroundTruthMCP extends McpAgent<Env> {
             error: e instanceof Error ? e.message : String(e),
           });
         }
-      }
+      },
+    );
+
+    // ───────────────────────────────────────────────
+    // PAID $0.02: inspect_security_headers
+    // ───────────────────────────────────────────────
+    registerPaidTool(
+      "inspect_security_headers",
+      AGENTIC_TOOL_PRICES_USD.inspect_security_headers,
+      {
+        title: "Security Header Inspection",
+        description:
+          "Fetch a public URL and inspect security-relevant response headers before " +
+          "you claim that a product or endpoint has a strong browser-facing security " +
+          "baseline. Use this for quick due diligence on public apps and docs sites. " +
+          "It checks for common headers such as HSTS, CSP, X-Frame-Options, " +
+          "Referrer-Policy, Permissions-Policy, and X-Content-Type-Options. It does " +
+          "not replace a real security review, authenticated testing, or vulnerability scanning.",
+        inputSchema: {
+          url: z.string().trim().min(1).describe(
+            "Public http(s) URL or bare domain to inspect. Bare domains are normalized to https:// automatically.",
+          ),
+        },
+        outputSchema: {
+          inputUrl: z.string().optional().describe(
+            "Original user input when normalization changed it.",
+          ),
+          url: z.string().describe(
+            "Normalized URL that was fetched.",
+          ),
+          accessible: z.boolean().describe(
+            "True when the endpoint returned an HTTP response.",
+          ),
+          status: z.number().int().optional().describe(
+            "HTTP status code returned by the endpoint.",
+          ),
+          https: z.boolean().describe(
+            "True when the normalized URL used https.",
+          ),
+          presentCount: z.number().int().nonnegative().optional().describe(
+            "Number of tracked security headers that were present.",
+          ),
+          score: z.enum(["strong", "moderate", "weak"]).optional().describe(
+            "Heuristic security-header score based on how many tracked headers were present.",
+          ),
+          headers: z.object({
+            strictTransportSecurity: z.string().nullable(),
+            contentSecurityPolicy: z.string().nullable(),
+            xFrameOptions: z.string().nullable(),
+            referrerPolicy: z.string().nullable(),
+            permissionsPolicy: z.string().nullable(),
+            xContentTypeOptions: z.string().nullable(),
+            crossOriginOpenerPolicy: z.string().nullable(),
+            crossOriginResourcePolicy: z.string().nullable(),
+          }).optional().describe(
+            "Tracked response headers and their raw values when present.",
+          ),
+          missingRecommended: z.array(z.string()).optional().describe(
+            "Tracked headers that were not present on the response.",
+          ),
+          error: z.string().optional().describe(
+            "Validation or network error when the request could not be completed.",
+          ),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
+      },
+      async ({ url }) => {
+        const normalizedUrl = normalizeHttpUrlInput(url);
+        if (!normalizedUrl) {
+          logUsage("inspect_security_headers", false);
+          return structuredToolResult({
+            url,
+            accessible: false,
+            https: false,
+            error: "Invalid URL. Use a public http(s) URL or a bare domain like google.com.",
+          });
+        }
+
+        try {
+          const resp = await fetch(normalizedUrl, {
+            headers: { "User-Agent": "GroundTruth/0.3" },
+          });
+          const summary = getSecurityHeaderSummary(resp.headers);
+          logUsage("inspect_security_headers", true);
+          return structuredToolResult({
+            ...(normalizedUrl !== url ? { inputUrl: url } : {}),
+            url: normalizedUrl,
+            accessible: true,
+            status: resp.status,
+            https: new URL(normalizedUrl).protocol === "https:",
+            ...summary,
+          });
+        } catch (error: unknown) {
+          logUsage("inspect_security_headers", false);
+          return structuredToolResult({
+            ...(normalizedUrl !== url ? { inputUrl: url } : {}),
+            url: normalizedUrl,
+            accessible: false,
+            https: new URL(normalizedUrl).protocol === "https:",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+    );
+
+    // ───────────────────────────────────────────────
+    // PAID $0.04: compare_pricing_pages
+    // ───────────────────────────────────────────────
+    registerPaidTool(
+      "compare_pricing_pages",
+      AGENTIC_TOOL_PRICES_USD.compare_pricing_pages,
+      {
+        title: "Pricing Page Comparison",
+        description:
+          "Compare two to five public pricing pages side by side before you make " +
+          "competitive pricing or packaging claims. Use this when you want a quick, " +
+          "live comparison of visible prices, free-plan signals, and plan-name hints " +
+          "across vendors. The output is heuristic and page-level: it does not map " +
+          "every price to every plan or normalize regional billing differences.",
+        inputSchema: {
+          pages: z.array(z.object({
+            name: z.string().trim().min(1).describe(
+              "Short vendor or product label to use in the comparison output.",
+            ),
+            url: z.string().url().describe(
+              "Public pricing page URL for that vendor or product.",
+            ),
+          })).min(2).max(5).describe(
+            "Two to five named pricing pages to compare side by side.",
+          ),
+        },
+        outputSchema: {
+          pages: z.array(z.object({
+            name: z.string(),
+            url: z.string(),
+            cached: z.boolean().optional(),
+            pricesFound: z.array(z.string()).optional(),
+            plansDetected: z.array(z.string()).optional(),
+            hasFreeOption: z.boolean().optional(),
+            hasFreeTrial: z.boolean().optional(),
+            pageLength: z.number().int().nonnegative().optional(),
+            error: z.string().optional(),
+          })).describe(
+            "Per-page pricing signals returned in input order.",
+          ),
+          summary: z.object({
+            pagesCompared: z.number().int().nonnegative(),
+            pagesWithVisiblePrices: z.number().int().nonnegative(),
+            pagesWithFreeOption: z.number().int().nonnegative(),
+            pagesWithFreeTrial: z.number().int().nonnegative(),
+          }).describe(
+            "Aggregate counts across all compared pricing pages.",
+          ),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
+      },
+      async ({ pages }) => {
+        const results = [];
+
+        for (const page of pages) {
+          try {
+            const analysis = await analyzePricingPage(sql, page.url);
+            results.push({
+              name: page.name,
+              ...analysis,
+            });
+          } catch (error: unknown) {
+            results.push({
+              name: page.name,
+              url: page.url,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+
+        logUsage("compare_pricing_pages", true);
+        return structuredToolResult({
+          pages: results,
+          summary: {
+            pagesCompared: results.length,
+            pagesWithVisiblePrices: results.filter(
+              (page) => "pricesFound" in page && Array.isArray(page.pricesFound) && page.pricesFound.length > 0,
+            ).length,
+            pagesWithFreeOption: results.filter(
+              (page) => "hasFreeOption" in page && page.hasFreeOption === true,
+            ).length,
+            pagesWithFreeTrial: results.filter(
+              (page) => "hasFreeTrial" in page && page.hasFreeTrial === true,
+            ).length,
+          },
+        });
+      },
     );
 
     // ───────────────────────────────────────────────
     // PAID $0.03: compare_competitors
     // ───────────────────────────────────────────────
-    this.server.registerTool(
+    registerPaidTool(
       "compare_competitors",
+      AGENTIC_TOOL_PRICES_USD.compare_competitors,
       {
         title: "Named Package Comparison",
         description:
@@ -966,14 +2264,15 @@ export class GroundTruthMCP extends McpAgent<Env> {
         }
         logUsage("compare_competitors", true);
         return structuredToolResult({ packages, registry, comparisons });
-      }
+      },
     );
 
     // ───────────────────────────────────────────────
     // PAID $0.05: verify_claim
     // ───────────────────────────────────────────────
-    this.server.registerTool(
+    registerPaidTool(
       "verify_claim",
+      AGENTIC_TOOL_PRICES_USD.verify_claim,
       {
         title: "Claim Support Check",
         description:
@@ -1056,7 +2355,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           try {
             const { body, fromCache } = await cachedFetch(sql, url);
             const bodyLower = body.toLowerCase();
-            const keywordHits = keywords.filter(kw => bodyLower.includes(kw.toLowerCase()));
+            const keywordHits = keywords.filter((kw: string) => bodyLower.includes(kw.toLowerCase()));
             sources.push({
               url,
               accessible: true,
@@ -1090,14 +2389,89 @@ export class GroundTruthMCP extends McpAgent<Env> {
                      supporting >= sources.length * 0.5 ? "LIKELY TRUE" : "LIKELY FALSE",
           },
         });
-      }
+      },
+    );
+
+    // ───────────────────────────────────────────────
+    // PAID $0.05: assess_compliance_posture
+    // ───────────────────────────────────────────────
+    registerPaidTool(
+      "assess_compliance_posture",
+      AGENTIC_TOOL_PRICES_USD.assess_compliance_posture,
+      {
+        title: "Compliance Signal Scan",
+        description:
+          "Scan a public security, trust, compliance, or legal page for common " +
+          "enterprise buying signals before you claim a vendor supports a particular " +
+          "compliance posture. It looks for public references to SOC 2, ISO 27001, " +
+          "GDPR, HIPAA, DPA terms, subprocessors, SSO, SCIM, encryption, and data " +
+          "residency language. This is a signal scanner, not proof of certification or legal sufficiency.",
+        inputSchema: {
+          url: z.string().url().describe(
+            "Public trust, security, compliance, or policy URL to scan.",
+          ),
+        },
+        outputSchema: {
+          url: z.string().describe(
+            "Compliance or trust page that was analyzed.",
+          ),
+          cached: z.boolean().optional().describe(
+            "True when the page body came from the 5-minute cache.",
+          ),
+          matchedSignals: z.array(z.string()).optional().describe(
+            "Signal names that were detected on the page.",
+          ),
+          signals: z.object({
+            soc2: z.boolean(),
+            iso27001: z.boolean(),
+            gdpr: z.boolean(),
+            hipaa: z.boolean(),
+            dpa: z.boolean(),
+            subprocessorList: z.boolean(),
+            sso: z.boolean(),
+            scim: z.boolean(),
+            encryption: z.boolean(),
+            dataResidency: z.boolean(),
+          }).optional().describe(
+            "Boolean scan results for common enterprise compliance and security signals.",
+          ),
+          pageLength: z.number().int().nonnegative().optional().describe(
+            "Size of the fetched page body in characters.",
+          ),
+          error: z.string().optional().describe(
+            "Fetch or parsing error when the page could not be analyzed.",
+          ),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
+      },
+      async ({ url }) => {
+        try {
+          const { body, fromCache } = await cachedFetch(sql, url);
+          const { signals, matchedSignals } = extractComplianceSignals(body);
+          logUsage("assess_compliance_posture", true);
+          return structuredToolResult({
+            url,
+            cached: fromCache,
+            matchedSignals,
+            signals,
+            pageLength: body.length,
+          });
+        } catch (error: unknown) {
+          logUsage("assess_compliance_posture", false);
+          return structuredToolResult({
+            url,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
     );
 
     // ───────────────────────────────────────────────
     // PAID $0.05: test_hypothesis
     // ───────────────────────────────────────────────
-    this.server.registerTool(
+    registerPaidTool(
       "test_hypothesis",
+      AGENTIC_TOOL_PRICES_USD.test_hypothesis,
       {
         title: "Multi-step Hypothesis Test",
         description:
@@ -1273,7 +2647,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
                      passedCount === 0 ? "REFUTED" : "PARTIALLY SUPPORTED",
           },
         });
-      }
+      },
     );
   }
 }
@@ -1281,11 +2655,15 @@ export class GroundTruthMCP extends McpAgent<Env> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
+    const isPrimaryMcpPath = url.pathname === "/mcp";
+    const isTrustedXpayPathRequest = hasTrustedXpayPath(url);
+    const isTrustedXpayQueryRequest = hasTrustedXpayQuery(url);
+    const servedMcpPath = isTrustedXpayPathRequest ? url.pathname : "/mcp";
 
     // ───────────────────────────────────────────────
     // MCP endpoint with billing and usage enforcement
     // ───────────────────────────────────────────────
-    if (url.pathname === "/mcp") {
+    if (isPrimaryMcpPath || isTrustedXpayPathRequest) {
       let body: McpToolCallBody | null = null;
       try {
         body = await request.clone().json() as McpToolCallBody;
@@ -1298,6 +2676,33 @@ export default {
       const toolName = method === "tools/call" && typeof body?.params?.name === "string"
         ? body.params.name
         : null;
+
+      if (IS_XPAY_UPSTREAM) {
+        if (!XPAY_UPSTREAM_SECRET && !XPAY_UPSTREAM_PATH_SECRET) {
+          return jsonError(
+            500,
+            "xpay_upstream_trust_missing",
+            "This xpay upstream deployment is missing its trust configuration.",
+            { header: XPAY_UPSTREAM_HEADER, path: "/mcp/<secret>" },
+            requestId,
+          );
+        }
+
+        const trustedXpayRequest = isTrustedXpayRequest(request) ||
+          isTrustedXpayPathRequest ||
+          isTrustedXpayQueryRequest;
+        if (!trustedXpayRequest && !isPublicXpayDiscoveryMethod(method)) {
+          return jsonError(
+            401,
+            "invalid_xpay_upstream_secret",
+            "This xpay upstream deployment requires a valid shared secret header, path, or query token.",
+            { header: XPAY_UPSTREAM_HEADER, path: "/mcp/<secret>", query: "xpay_secret" },
+            requestId,
+          );
+        }
+
+        return GroundTruthMCP.serve("/mcp").fetch(request, env, ctx);
+      }
 
       if (method === "tools/call" && toolName) {
         if (FREE_TOOLS.includes(toolName)) {
@@ -1317,9 +2722,9 @@ export default {
                 return jsonError(
                   429,
                   "quota_exceeded",
-                  `Pro monthly quota exceeded for ${month}.`,
+                  `Team monthly quota exceeded for ${month}.`,
                   {
-                    tier: "pro",
+                    tier: "team",
                     tool: toolName,
                     month,
                     limit,
@@ -1363,23 +2768,102 @@ export default {
             await incrementUsage(env.API_KEYS, usageKey, "free", subjectId, month, toolName);
           }
         } else {
-          const proAccess = await requireProAccess(env.API_KEYS, request, toolName, requestId);
-          if (proAccess instanceof Response) {
-            return proAccess;
-          }
+          const maybeApiKey = request.headers.get("X-API-Key")?.trim();
+          if (maybeApiKey) {
+            const proAccess = await requireProAccess(env.API_KEYS, request, toolName, requestId);
+            if (proAccess instanceof Response) {
+              return proAccess;
+            }
 
-          await incrementUsage(
-            env.API_KEYS,
-            proAccess.usageKey,
-            "pro",
-            proAccess.subjectId,
-            proAccess.month,
-            toolName,
-          );
+            await incrementUsage(
+              env.API_KEYS,
+              proAccess.usageKey,
+              "pro",
+              proAccess.subjectId,
+              proAccess.month,
+              toolName,
+            );
+          }
         }
       }
 
-      return GroundTruthMCP.serve("/mcp").fetch(request, env, ctx);
+      return GroundTruthMCP.serve(servedMcpPath).fetch(request, env, ctx);
+    }
+
+    if (url.pathname === SERVER_CARD_ICON_PATH) {
+      return new Response(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Ground Truth</title>
+  <desc id="desc">Ground Truth logo</desc>
+  <rect width="128" height="128" rx="24" fill="#8d2f12"/>
+  <rect x="18" y="24" width="40" height="14" rx="7" fill="#f5e6c8"/>
+  <rect x="18" y="57" width="40" height="14" rx="7" fill="#f5e6c8"/>
+  <rect x="18" y="90" width="22" height="14" rx="7" fill="#f5e6c8"/>
+  <path d="M86 24c-14.359 0-26 11.641-26 26v28c0 14.359 11.641 26 26 26 11.38 0 21.053-7.303 24.596-17.5H92c-3.589 0-6.5-2.91-6.5-6.5S88.411 73.5 92 73.5h20c.553 0 1 .448 1 1C113 90.793 100.793 103 86 103S59 90.793 59 76V50c0-14.911 12.089-27 27-27 10.717 0 19.976 6.243 24.34 15.299l-11.652 5.61C95.76 38.104 91.205 24 86 24Z" fill="#f5e6c8"/>
+</svg>`,
+        {
+          headers: {
+            "content-type": "image/svg+xml; charset=utf-8",
+            "cache-control": "public, max-age=3600",
+          },
+        },
+      );
+    }
+
+    if (url.pathname === "/.well-known/mcp/server-card.json") {
+      const publicOrigin = IS_XPAY_UPSTREAM
+        ? PUBLIC_APP_ORIGIN
+        : url.origin;
+      const homepage = `${publicOrigin}/`;
+      const icon = `${publicOrigin}${SERVER_CARD_ICON_PATH}`;
+      return jsonResponse({
+        name: "ground-truth",
+        title: "Ground Truth",
+        description: SERVER_CARD_DESCRIPTION,
+        homepage,
+        icon,
+        serverInfo: {
+          name: "ground-truth",
+          title: "Ground Truth",
+          version: SERVER_VERSION,
+        },
+        authentication: {
+          required: IS_XPAY_UPSTREAM,
+          schemes: IS_XPAY_UPSTREAM ? ["header"] : ["header", "x402"],
+        },
+        metadata: IS_XPAY_UPSTREAM
+          ? {
+            description: SERVER_CARD_DESCRIPTION,
+            homepage,
+            website: homepage,
+            icon,
+            pricing: `${publicOrigin}/pricing`,
+            upstreamMode: "xpay_proxy",
+            upstreamAuthHeader: XPAY_UPSTREAM_HEADER,
+          }
+          : {
+            description: SERVER_CARD_DESCRIPTION,
+            homepage,
+            website: homepage,
+            icon,
+            pricing: `${publicOrigin}/pricing`,
+            teamPlan: {
+              priceUsdMonthly: TEAM_PLAN_MONTHLY_PRICE_USD,
+              quota: PRO_MONTHLY_LIMIT,
+              header: "X-API-Key",
+            },
+            agenticPayPerUse: {
+              enabled: X402_PAYMENT_ENABLED,
+              network: X402_NETWORK,
+              facilitator: X402_FACILITATOR_URL,
+              recipient: X402_RECIPIENT,
+              toolPricesUsd: AGENTIC_TOOL_PRICES_USD,
+            },
+          },
+        tools: SERVER_CARD_TOOLS,
+        resources: [],
+        prompts: [],
+      });
     }
 
     // ───────────────────────────────────────────────
@@ -1393,7 +2877,7 @@ export default {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth — Pricing</title>
-  <meta name="description" content="Verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.">
+  <meta name="description" content="Verification layer for AI agents with free endpoint checks, agentic pay-per-use, and a team subscription for higher-volume verification.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -1408,7 +2892,7 @@ export default {
     a { color: #7c8aff; text-decoration: none; }
     a:hover { text-decoration: underline; }
 
-    .page { max-width: 820px; margin: 0 auto; }
+    .page { max-width: 1040px; margin: 0 auto; }
     .eyebrow {
       display: inline-block;
       margin: 0 auto 16px;
@@ -1431,7 +2915,7 @@ export default {
       line-height: 1.7;
     }
 
-    .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 48px; }
+    .plans { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin-bottom: 48px; }
 
     .plan {
       background: rgba(20, 20, 20, 0.92);
@@ -1446,6 +2930,17 @@ export default {
     .plan .price { font-size: 2.4rem; font-weight: 700; color: #fff; margin: 16px 0; }
     .plan .price span { font-size: 1rem; font-weight: 400; color: #73738a; }
     .plan .desc { color: #9c9cb2; font-size: 0.95rem; margin-bottom: 20px; line-height: 1.6; }
+    .price-list {
+      margin-top: 8px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(11, 11, 17, 0.95);
+      border: 1px solid #252536;
+      color: #c8c8d8;
+      font-size: 0.9rem;
+      line-height: 1.7;
+    }
+    .price-list strong { color: #fff; }
 
     .plan ul { list-style: none; margin-bottom: 24px; }
     .plan ul li {
@@ -1503,7 +2998,7 @@ export default {
       font-size: 0.9rem;
     }
 
-    @media (max-width: 640px) {
+    @media (max-width: 960px) {
       .plans { grid-template-columns: 1fr; }
     }
   </style>
@@ -1512,8 +3007,8 @@ export default {
   <div class="page">
     <div class="hero">
       <div class="eyebrow">Verification Layer For AI Agents</div>
-      <h1>Start with endpoint checks. Upgrade for broader verification.</h1>
-      <p class="sub">Ground Truth is a verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
+      <h1>Choose free checks, agentic pay-per-use, or a team plan.</h1>
+      <p class="sub">Ground Truth gives AI agents live verification tools. Start with free endpoint checks, pay per tool call with x402-compatible clients, or use a team API key for broader monthly usage.</p>
     </div>
 
     <div class="plans">
@@ -1531,24 +3026,45 @@ export default {
       </div>
 
       <div class="plan plan-pro">
-        <h2>Pro</h2>
-        <div class="price">$9<span>/month</span></div>
-        <p class="desc">Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
+        <h2>Agentic</h2>
+        <div class="price">From $0.01<span>/call</span></div>
+        <p class="desc">Use x402-compatible MCP clients or an xpay proxy to pay only when an agent runs a paid verification tool.</p>
+        <ul>
+          <li>No monthly subscription required</li>
+          <li>Per-tool USDC pricing via x402</li>
+          <li>Works with x402-aware clients or an xpay proxy</li>
+          <li>Best for autonomous agents and variable workloads</li>
+        </ul>
+        <div class="price-list">
+          <strong>Example tool prices</strong><br>
+          <code>estimate_market</code> $${AGENTIC_TOOL_PRICES_USD.estimate_market.toFixed(2)}<br>
+          <code>check_pricing</code> $${AGENTIC_TOOL_PRICES_USD.check_pricing.toFixed(2)}<br>
+          <code>inspect_security_headers</code> $${AGENTIC_TOOL_PRICES_USD.inspect_security_headers.toFixed(2)}<br>
+          <code>compare_pricing_pages</code> $${AGENTIC_TOOL_PRICES_USD.compare_pricing_pages.toFixed(2)}<br>
+          <code>verify_claim</code> $${AGENTIC_TOOL_PRICES_USD.verify_claim.toFixed(2)}
+        </div>
+        <a href="/#mcp-setup" class="btn btn-outline" style="margin-top: 24px;">See Agentic Setup</a>
+      </div>
+
+      <div class="plan">
+        <h2>Team</h2>
+        <div class="price">$${TEAM_PLAN_MONTHLY_PRICE_USD}<span>/month</span></div>
+        <p class="desc">Use a team API key for broader verification, predictable spend, and shared internal usage.</p>
         <ul>
           <li>Requires <strong>X-API-Key</strong></li>
           <li>Billing must be active</li>
-          <li>5,000 requests per calendar month by default</li>
+          <li>${PRO_MONTHLY_LIMIT.toLocaleString()} requests per calendar month by default</li>
           <li>Usage tracked per API key and tool</li>
-          <li>Includes pricing checks, claim verification, market checks, competitor comparisons, and hypothesis tests</li>
+          <li>Includes pricing, compliance, market, competitor, and hypothesis tools</li>
         </ul>
         <form action="/api/checkout" method="POST">
-          <button type="submit" class="btn btn-primary">Subscribe Now</button>
+          <button type="submit" class="btn btn-primary">Subscribe Team Plan</button>
         </form>
       </div>
     </div>
 
     <div class="note">
-      <strong>What Pro unlocks today:</strong> Free includes <strong>check_endpoint</strong> with a 100-request monthly cap. Pro adds the remaining verification tools with a higher monthly quota.
+      <strong>How to choose:</strong> Free is for lightweight endpoint checks. <strong>Agentic</strong> is for pay-per-tool-call automation with x402 or xpay. <strong>Team</strong> is the predictable monthly plan for people and internal tools that prefer API-key billing.
     </div>
 
     <div class="faq">
@@ -1567,8 +3083,12 @@ export default {
           <dd>No. <strong>check_endpoint</strong> works immediately with no signup, up to 100 requests per calendar month.</dd>
         </div>
         <div class="faq-item">
-          <dt>What happens if I cancel?</dt>
-          <dd>Your Pro API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong>.</dd>
+          <dt>How do agentic payments work?</dt>
+          <dd>Paid tools advertise x402 pricing metadata. An x402-aware client, or an xpay proxy in front of this server, can pay per tool call automatically using USDC.</dd>
+        </div>
+        <div class="faq-item">
+          <dt>What happens if I cancel the team plan?</dt>
+          <dd>Your team API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong> or switch to the agentic pay-per-use path.</dd>
         </div>
       </dl>
     </div>
@@ -1590,6 +3110,7 @@ export default {
     if (url.pathname === "/api/checkout" && request.method === "POST") {
       try {
         const stripe = env.STRIPE_SECRET_KEY;
+        const stripePriceId = env.STRIPE_PRICE_ID || DEFAULT_STRIPE_PRICE_ID;
         
         // Create Stripe checkout session
         const checkoutResponse = await fetch("https://api.stripe.com/v1/checkout/sessions", {
@@ -1600,7 +3121,7 @@ export default {
           },
           body: new URLSearchParams({
             "payment_method_types[0]": "card",
-            "line_items[0][price]": "price_1TD5jiKOR3CPCI6H5nBr8KV8",
+            "line_items[0][price]": stripePriceId,
             "line_items[0][quantity]": "1",
             "mode": "subscription",
             "success_url": `${url.origin}/api/success?session_id={CHECKOUT_SESSION_ID}`,
@@ -1679,7 +3200,7 @@ export default {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Welcome to Ground Truth Pro!</title>
+  <title>Welcome to Ground Truth Team!</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 
@@ -1752,8 +3273,8 @@ export default {
 <body>
   <div class="container">
     <div class="success-icon">🎉</div>
-    <h1>Welcome to Ground Truth Pro!</h1>
-    <p>Your subscription is active. Here's your API key:</p>
+    <h1>Welcome to Ground Truth Team!</h1>
+    <p>Your team subscription is active. Here's your API key:</p>
     
     <div class="api-key-box" id="apiKeyBox">
       ${apiKey}
@@ -1764,7 +3285,7 @@ export default {
       <h3>How to Use Your API Key</h3>
       <p>Direct MCP over HTTP is session-based. Initialize once, then send your API key on tool calls:</p>
       <pre>X-API-Key: ${apiKey}</pre>
-      <p style="margin-top: 15px;">Default monthly quota: 5,000 tool requests.</p>
+      <p style="margin-top: 15px;">Default monthly quota: ${PRO_MONTHLY_LIMIT.toLocaleString()} tool requests.</p>
       
       <p style="margin-top: 15px;">Example with curl:</p>
       <pre>SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
@@ -1885,7 +3406,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth — Verification Layer for AI Agents</title>
-  <meta name="description" content="Verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.">
+  <meta name="description" content="Verification layer for AI agents with free endpoint checks, agentic pay-per-use, and a team subscription for pricing, compliance, and competitive verification.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -2018,7 +3539,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     .pricing-grid {
       display: grid;
       gap: 16px;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
     .plan {
       background: rgba(20, 20, 20, 0.92);
@@ -2146,21 +3667,21 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     <div class="hero">
       <div class="eyebrow">Verification Layer For AI Agents</div>
       <h1>Verify before your agents act.</h1>
-      <p class="sub">Ground Truth is a verification layer for AI agents. Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
+      <p class="sub">Ground Truth gives agents live verification tools for pricing, compliance, security posture, vendor diligence, and market checks. Use the free endpoint check, pay per tool call with x402-compatible clients, or use a team API key for predictable monthly access.</p>
       <div class="cta-row">
         <a href="/pricing" class="btn btn-primary">View Pricing</a>
         <a href="#mcp-setup" class="btn btn-secondary">See MCP Setup</a>
       </div>
       <div class="hero-meta">
         <span>Live data checks</span>
-        <span>Direct API or MCP</span>
+        <span>Agentic pay-per-use or team plan</span>
         <span>Cloudflare Workers</span>
       </div>
     </div>
 
     <section id="what-it-verifies">
       <h2>What Ground Truth verifies</h2>
-      <p class="section-intro">Ground Truth helps agents check the kind of facts that are most likely to drift, break, or get invented under pressure.</p>
+      <p class="section-intro">Ground Truth helps agents check the facts that are most expensive to get wrong in buying, support, research, and product workflows.</p>
       <div class="card-grid">
         <div class="card verification-card">
           <h3>Verify a pricing claim</h3>
@@ -2168,9 +3689,19 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           <span class="tool-tag">check_pricing</span>
         </div>
         <div class="card verification-card">
-          <h3>Check whether a competitor exists</h3>
-          <p>Search npm or PyPI before your agent says there is no alternative in a category.</p>
-          <span class="tool-tag">estimate_market</span>
+          <h3>Compare vendor pricing pages</h3>
+          <p>Scan multiple pricing pages side by side before your agent claims one vendor is cheaper or has a better free tier.</p>
+          <span class="tool-tag">compare_pricing_pages</span>
+        </div>
+        <div class="card verification-card">
+          <h3>Assess compliance posture</h3>
+          <p>Check trust and security pages for SOC 2, ISO 27001, GDPR, HIPAA, SSO, SCIM, and DPA signals before repeating them.</p>
+          <span class="tool-tag">assess_compliance_posture</span>
+        </div>
+        <div class="card verification-card">
+          <h3>Inspect security headers</h3>
+          <p>Check public endpoints for HSTS, CSP, frame protections, and related browser-facing security headers.</p>
+          <span class="tool-tag">inspect_security_headers</span>
         </div>
         <div class="card verification-card">
           <h3>Validate an API endpoint</h3>
@@ -2178,19 +3709,9 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           <span class="tool-tag">check_endpoint</span>
         </div>
         <div class="card verification-card">
-          <h3>Compare package popularity</h3>
-          <p>Compare live package metadata instead of guessing which package is more active or widely used.</p>
-          <span class="tool-tag">compare_competitors</span>
-        </div>
-        <div class="card verification-card">
-          <h3>Test a market assumption</h3>
-          <p>Turn assumptions like "this category is still small" into pass/fail checks against live data.</p>
-          <span class="tool-tag">test_hypothesis</span>
-        </div>
-        <div class="card verification-card">
-          <h3>Confirm whether a support policy applies</h3>
-          <p>Check public help, support, or policy pages before your agent repeats a claim as fact.</p>
-          <span class="tool-tag">verify_claim</span>
+          <h3>Check whether a competitor exists</h3>
+          <p>Search npm or PyPI before your agent says there is no alternative in a category.</p>
+          <span class="tool-tag">estimate_market</span>
         </div>
       </div>
     </section>
@@ -2204,16 +3725,16 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           <p>Agents often repeat old prices long after a plan page changed. Live verification catches that drift.</p>
         </div>
         <div class="card">
-          <h3>Endpoints look real even when they are not</h3>
-          <p>A confident recommendation is not the same as a working API. Ground Truth checks the endpoint first.</p>
+          <h3>Compliance claims get copied without proof</h3>
+          <p>SOC 2, HIPAA, and GDPR claims often get repeated from memory. Ground Truth checks the live public page first.</p>
+        </div>
+        <div class="card">
+          <h3>Security posture is easy to overstate</h3>
+          <p>Header-level and trust-page checks help agents ground basic security claims before they reach a buyer or customer.</p>
         </div>
         <div class="card">
           <h3>Competitive claims get invented</h3>
           <p>Agents say "no competitors" or "most popular" without checking the current market. Registry data gives them a way to prove it.</p>
-        </div>
-        <div class="card">
-          <h3>Policies and support terms move</h3>
-          <p>Support plans, public terms, and help-center language change over time. Verification keeps answers tied to the live source.</p>
         </div>
       </div>
     </section>
@@ -2231,27 +3752,27 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           <p>Before an agent says there is no alternative to Prisma for edge deployments, it searches the registry for real packages.</p>
         </div>
         <div class="card workflow-card">
+          <h3>Compliance diligence</h3>
+          <p>Before an agent says a vendor is SOC 2 and GDPR-ready, it scans the public trust page for the right signals.</p>
+        </div>
+        <div class="card workflow-card">
+          <h3>Security posture check</h3>
+          <p>Before an agent says an app has a solid browser-facing baseline, it checks the live response headers.</p>
+        </div>
+        <div class="card workflow-card">
+          <h3>Pricing comparison</h3>
+          <p>Before an agent says one vendor is cheaper, it compares multiple pricing pages side by side.</p>
+        </div>
+        <div class="card workflow-card">
           <h3>API validation</h3>
           <p>Before an agent recommends an endpoint in docs or support, it confirms the endpoint responds.</p>
-        </div>
-        <div class="card workflow-card">
-          <h3>Package comparison</h3>
-          <p>Before an agent says Vue has overtaken React, it compares live package metadata side by side.</p>
-        </div>
-        <div class="card workflow-card">
-          <h3>Market assumption</h3>
-          <p>Before an agent says the MCP ecosystem is still tiny, it runs a count-based hypothesis test.</p>
-        </div>
-        <div class="card workflow-card">
-          <h3>Support policy confirmation</h3>
-          <p>Before an agent repeats a support entitlement, it checks the current public support page for evidence.</p>
         </div>
       </div>
     </section>
 
     <section id="pricing">
-      <h2>Free vs Pro</h2>
-      <p class="section-intro">Free tier includes limited monthly endpoint checks. Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
+      <h2>Free, Agentic, and Team</h2>
+      <p class="section-intro">Use the free endpoint check, pay per tool call with x402-compatible automation, or subscribe to a team plan for predictable monthly usage.</p>
       <div class="pricing-grid">
         <div class="plan">
           <div class="label">Free</div>
@@ -2265,20 +3786,32 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           </ul>
         </div>
         <div class="plan pro">
-          <div class="label">Pro</div>
-          <h3>Broader verification</h3>
-          <div class="price">$9<span>/month</span></div>
-          <p>Pro unlocks claim verification, market checks, competitor comparisons, and higher usage limits.</p>
+          <div class="label">Agentic</div>
+          <h3>Pay per tool call</h3>
+          <div class="price">From $0.01<span>/call</span></div>
+          <p>Ideal for autonomous agents, MCP clients with x402, or an xpay proxy in front of this server.</p>
+          <ul>
+            <li>Per-tool USDC pricing</li>
+            <li>No monthly commitment</li>
+            <li>Works well for variable workloads</li>
+            <li>Includes pricing, compliance, security, market, and hypothesis tools</li>
+          </ul>
+        </div>
+        <div class="plan">
+          <div class="label">Team</div>
+          <h3>Monthly API key plan</h3>
+          <div class="price">$${TEAM_PLAN_MONTHLY_PRICE_USD}<span>/month</span></div>
+          <p>Best for internal teams that want predictable spend, shared access, and a familiar API-key workflow.</p>
           <ul>
             <li>Requires <code>X-API-Key</code></li>
-            <li>5,000 requests per calendar month by default</li>
+            <li>${PRO_MONTHLY_LIMIT.toLocaleString()} requests per calendar month by default</li>
             <li>Usage tracked per API key and tool</li>
-            <li>Includes pricing checks, claim verification, market checks, competitor comparisons, and hypothesis tests</li>
+            <li>Includes all paid verification tools</li>
           </ul>
         </div>
       </div>
       <div class="link-row">
-        <a href="/pricing" class="btn btn-primary">Get Pro Access</a>
+        <a href="/pricing" class="btn btn-primary">See All Pricing</a>
         <a href="/mcp" class="btn btn-secondary">Try The Free Check</a>
       </div>
     </section>
@@ -2372,7 +3905,7 @@ console.log(result);</div>
 
     <section id="mcp-setup">
       <h2>MCP setup</h2>
-      <p class="mcp-note"><strong>MCP</strong> stands for Model Context Protocol. If you use Claude Desktop or Cursor, Ground Truth can plug in as a verification tool so your agent checks live data before it responds.</p>
+      <p class="mcp-note"><strong>MCP</strong> stands for Model Context Protocol. Ground Truth works as a direct MCP server for team API-key access, and its paid tools also advertise x402 pricing metadata for agentic pay-per-use or an xpay proxy flow.</p>
       <div class="setup-grid">
         <div class="setup-card">
           <h3>Claude Desktop</h3>
@@ -2403,6 +3936,7 @@ console.log(result);</div>
 }</pre>
         </div>
       </div>
+      <p class="mcp-note" style="margin-top: 18px;">If you want turnkey pay-per-tool billing for clients that do not natively handle x402 yet, register this server URL with xpay and share the resulting proxy URL instead.</p>
     </section>
 
     <section id="use-cases">
@@ -2411,25 +3945,25 @@ console.log(result);</div>
       <div class="card-grid">
         <div class="card">
           <h3>Support</h3>
-          <p>Verify pricing claims, confirm whether a support policy applies, and check whether an API endpoint a customer asks about actually exists.</p>
+          <p>Verify pricing claims, confirm support entitlements, and check whether an API endpoint a customer asks about actually exists.</p>
         </div>
         <div class="card">
           <h3>Product</h3>
-          <p>Test market assumptions, check whether a competitor exists, and compare package popularity before you lock in a direction.</p>
+          <p>Test market assumptions, check whether a competitor exists, and compare live pricing pages before you lock in a direction.</p>
         </div>
         <div class="card">
-          <h3>Legal</h3>
-          <p>Confirm support and policy language on live public pages before repeating it internally or externally.</p>
+          <h3>Compliance</h3>
+          <p>Scan trust pages for SOC 2, ISO 27001, HIPAA, GDPR, DPA, SSO, and SCIM signals before repeating them to buyers or internal stakeholders.</p>
         </div>
         <div class="card">
-          <h3>Market research</h3>
-          <p>Compare competitor pricing, count category players, and turn broad assumptions into structured live checks.</p>
+          <h3>Security & vendor diligence</h3>
+          <p>Inspect public security headers, verify claims against public evidence, and add lightweight diligence before an agent recommends or approves a vendor.</p>
         </div>
       </div>
     </section>
 
     <div class="footer">
-      <p>Built on Cloudflare Workers &middot; <a href="/pricing">Pricing</a> &middot; <a href="/stats">Stats</a> &middot; <a href="https://github.com/anish632/ground-truth-mcp">GitHub</a></p>
+      <p>Built on Cloudflare Workers &middot; <a href="/pricing">Pricing</a> &middot; <a href="/stats">Stats</a> &middot; <a href="https://smithery.ai/servers/anishdasmail/groundtruth">Smithery</a></p>
       <p style="margin-top: 8px;">Made by <a href="https://github.com/anish632">Anish Das</a></p>
     </div>
   </div>

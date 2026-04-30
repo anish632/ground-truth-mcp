@@ -1,8 +1,8 @@
-# Ground Truth — Billing and Auth Implementation Summary
+# Ground Truth — Billing and Access Implementation Summary
 
 This internal summary describes how Ground Truth's billing and access control work today.
 
-Ground Truth runs on Cloudflare Workers and exposes a verification layer for AI agents over MCP and direct HTTP. The billing layer keeps one free verification path open and gates the broader verification suite behind API keys with Stripe-backed billing state.
+Ground Truth runs on Cloudflare Workers and exposes a verification layer for AI agents over MCP and direct HTTP. The billing layer keeps one free verification path open, supports team API-key billing through Stripe, and supports agentic pay-per-use through x402-compatible payment flows.
 
 ---
 
@@ -11,11 +11,12 @@ Ground Truth runs on Cloudflare Workers and exposes a verification layer for AI 
 ### Access control
 
 - `check_endpoint` is available without an API key
-- All other verification tools are treated as Pro
-- Pro requests require a valid `X-API-Key`
-- Pro requests also require active billing
+- All other verification tools are paid
+- Paid requests can use either:
+  - a valid `X-API-Key` with active billing
+  - an x402 payment payload sent through MCP `_meta`
 - Free requests are capped at 100 requests per calendar month
-- Pro requests default to 5,000 requests per calendar month
+- Team requests default to 5,000 requests per calendar month
 
 ### Billing routes
 
@@ -24,37 +25,49 @@ Ground Truth runs on Cloudflare Workers and exposes a verification layer for AI 
 - `GET /api/success`
 - `POST /api/webhook`
 
+### Discovery and metadata routes
+
+- `GET /.well-known/mcp/server-card.json`
+
 ### Storage
 
 - API keys live in the `API_KEYS` KV namespace
 - Monthly usage counters also live in the `API_KEYS` KV namespace
-- Cache and request telemetry logs remain in Durable Objects with SQLite
+- Cache, request telemetry logs, and paid-response replay cache live in Durable Objects with SQLite
 
 ### Preserved behavior
 
 - Existing MCP tool implementations remain intact
-- Telemetry remains intact
+- Telemetry remains intact and can be disabled
 - Cloudflare Workers architecture remains intact
 
 ---
 
-## Auth Flow
+## Access Flow
 
 1. Request hits `/mcp`
 2. If the request targets `check_endpoint`, it can proceed without an API key
-3. If the request targets a Pro tool:
-   - require a valid `X-API-Key`
+3. If the request targets a paid tool and includes `X-API-Key`:
+   - require a valid API key
    - require active billing
-   - enforce the monthly Pro quota
-4. Missing or invalid API keys return `401`
-5. Inactive billing returns `402`
-6. Exhausted monthly quota returns `429`
+   - enforce the monthly team quota
+4. If the request targets a paid tool and does not include `X-API-Key`:
+   - advertise x402 payment requirements in MCP `_meta`
+   - verify the payment payload on retry
+   - execute the tool
+   - settle the payment
+5. Missing or invalid explicit team API keys return `401`
+6. Inactive team billing returns `402`
+7. Exhausted monthly free or team quotas return `429`
+8. Unpaid agentic calls return HTTP `200` with `_meta["x402/error"]`
 
-The free vs Pro split is controlled by the `FREE_TOOLS` constant in `src/index.ts`.
+The free-vs-paid split is controlled by the `FREE_TOOLS` constant in `src/index.ts`.
 
 ---
 
 ## Billing Flow
+
+### Team plan
 
 1. User opens `/pricing`
 2. User submits `POST /api/checkout`
@@ -63,6 +76,15 @@ The free vs Pro split is controlled by the `FREE_TOOLS` constant in `src/index.t
 5. Worker retrieves the session and creates or reuses an API key
 6. Stripe webhook updates subscription state
 7. Cancelled subscriptions mark keys inactive
+
+### Agentic pay-per-use
+
+1. Client calls a paid tool without `X-API-Key`
+2. Tool returns `_meta["x402/error"]` with payment requirements
+3. Client or proxy signs and retries with `_meta["x402/payment"]`
+4. Worker verifies the payment, executes the tool, and settles the payment
+5. Successful result returns `_meta["x402/payment-response"]`
+6. The payment token hash is cached to make paid retries idempotent
 
 ---
 
@@ -103,6 +125,16 @@ Note: some older Stripe dashboard resources may still carry the previous `Ground
 
 ---
 
+## x402 Runtime Defaults
+
+- Default network: `base-sepolia`
+- Default facilitator: `https://x402.org/facilitator`
+- Default mainnet facilitator: `https://api.cdp.coinbase.com/platform/v2/x402`
+- Recipient wallet is configurable via environment variable
+- Agentic payments can be disabled with `GROUND_TRUTH_AGENTIC_PAYMENTS=false`
+
+---
+
 ## Key Files
 
 - `src/index.ts`
@@ -111,10 +143,10 @@ Note: some older Stripe dashboard resources may still carry the previous `Ground
   - checkout route
   - success route
   - webhook route
+  - x402 payment flow
+  - server card route
 - `wrangler.jsonc`
   - KV binding configuration
-- `setup-stripe.mjs`
-  - helper script for creating Stripe resources
 - `SETUP.md`
   - deployment and operational setup
 - `NEXT_STEPS.md`
@@ -128,6 +160,7 @@ The public product story is now:
 
 - Headline: `Stop your AI from being wrong.`
 - Category: `verification layer for AI agents`
+- Billing story: `free endpoint checks`, `agentic pay-per-use`, `team subscription`
 - Value before protocol: explain the verification benefits first, and MCP second
 
 If future implementation changes touch the landing page, pricing page, README, or API docs, keep that ordering intact.
@@ -138,8 +171,9 @@ If future implementation changes touch the landing page, pricing page, README, o
 
 - Ensure `API_KEYS` is configured in every environment
 - Keep Stripe price IDs, public pricing copy, and checkout behavior aligned
-- If new tools are added, decide explicitly whether they belong in Free or Pro
-- If pricing changes, update Stripe resources and public docs together
+- Keep x402 recipient, network, and public pricing copy aligned
+- If new tools are added, decide explicitly whether they belong in Free or Paid
+- If pricing changes, update Stripe resources, x402 prices, and public docs together
 - Re-run usage enforcement checks after auth or billing changes
 
 ---
