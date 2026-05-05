@@ -3,7 +3,7 @@
   "name": "io.github.anish632/ground-truth",
   "title": "Ground Truth",
   "description": "Verification layer for AI agents: endpoint, pricing, compliance, security, and claim checks.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "remotes": [
     {
       "type": "streamable-http",
