@@ -27,7 +27,7 @@ const PAID_RESULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
-const SERVER_VERSION = "0.4.0";
+const SERVER_VERSION = "0.4.2";
 
 // --- Free tier tools ---
 const FREE_TOOLS = ["check_endpoint"];
@@ -176,7 +176,9 @@ const SERVER_CARD_TOOLS = [
         },
         sampleResponse: {
           type: "string",
-          description: "First 1,000 characters of the response body for quick inspection.",
+          description:
+            "First 1,000 characters of the response body for quick inspection. " +
+            "Use this as a debugging hint only; it may be truncated and should not be treated as a complete page capture.",
         },
         error: {
           type: "string",
@@ -439,14 +441,45 @@ const SERVER_CARD_TOOLS = [
             additionalProperties: false,
             properties: {
               name: { type: "string" },
-              url: { type: "string" },
-              cached: { type: "boolean" },
-              pricesFound: { type: "array", items: { type: "string" } },
-              plansDetected: { type: "array", items: { type: "string" } },
-              hasFreeOption: { type: "boolean" },
-              hasFreeTrial: { type: "boolean" },
-              pageLength: { type: "integer" },
-              error: { type: "string" },
+              url: {
+                type: "string",
+                description: "Pricing page URL that was fetched for this named vendor.",
+              },
+              cached: {
+                type: "boolean",
+                description: "True when this page body came from the 5-minute cache.",
+              },
+              pricesFound: {
+                type: "array",
+                description:
+                  "Distinct price-like strings extracted from this page. These are page-level hints and are not mapped to specific plans.",
+                items: { type: "string" },
+              },
+              plansDetected: {
+                type: "array",
+                description:
+                  "Lowercased heuristic plan labels detected on this page, such as free, pro, team, or enterprise.",
+                items: { type: "string" },
+              },
+              hasFreeOption: {
+                type: "boolean",
+                description:
+                  "True when this page contains visible text suggesting a free plan, free tier, or $0 option.",
+              },
+              hasFreeTrial: {
+                type: "boolean",
+                description:
+                  "True when this page contains visible text suggesting a free trial.",
+              },
+              pageLength: {
+                type: "integer",
+                description: "Size of this fetched page body in characters.",
+              },
+              error: {
+                type: "string",
+                description:
+                  "Fetch or parsing error for this specific pricing page when it could not be analyzed.",
+              },
             },
             required: ["name", "url"],
           },
@@ -456,10 +489,25 @@ const SERVER_CARD_TOOLS = [
           additionalProperties: false,
           description: "Aggregate counts across all compared pricing pages.",
           properties: {
-            pagesCompared: { type: "integer" },
-            pagesWithVisiblePrices: { type: "integer" },
-            pagesWithFreeOption: { type: "integer" },
-            pagesWithFreeTrial: { type: "integer" },
+            pagesCompared: {
+              type: "integer",
+              description: "Number of pricing pages included in the comparison.",
+            },
+            pagesWithVisiblePrices: {
+              type: "integer",
+              description:
+                "Number of pages where at least one price-like string was detected.",
+            },
+            pagesWithFreeOption: {
+              type: "integer",
+              description:
+                "Number of pages with page-level text suggesting a free plan, free tier, or $0 option.",
+            },
+            pagesWithFreeTrial: {
+              type: "integer",
+              description:
+                "Number of pages with page-level text suggesting a free trial.",
+            },
           },
           required: [
             "pagesCompared",
@@ -658,16 +706,56 @@ const SERVER_CARD_TOOLS = [
           description:
             "Boolean scan results for common enterprise compliance and security signals.",
           properties: {
-            soc2: { type: "boolean" },
-            iso27001: { type: "boolean" },
-            gdpr: { type: "boolean" },
-            hipaa: { type: "boolean" },
-            dpa: { type: "boolean" },
-            subprocessorList: { type: "boolean" },
-            sso: { type: "boolean" },
-            scim: { type: "boolean" },
-            encryption: { type: "boolean" },
-            dataResidency: { type: "boolean" },
+            soc2: {
+              type: "boolean",
+              description:
+                "True when the page references SOC 2 or SOC2 compliance language.",
+            },
+            iso27001: {
+              type: "boolean",
+              description:
+                "True when the page references ISO 27001 certification or compliance language.",
+            },
+            gdpr: {
+              type: "boolean",
+              description:
+                "True when the page references GDPR or the General Data Protection Regulation.",
+            },
+            hipaa: {
+              type: "boolean",
+              description:
+                "True when the page references HIPAA compliance language.",
+            },
+            dpa: {
+              type: "boolean",
+              description:
+                "True when the page references a data processing agreement or DPA.",
+            },
+            subprocessorList: {
+              type: "boolean",
+              description:
+                "True when the page references subprocessors or a subprocessor list.",
+            },
+            sso: {
+              type: "boolean",
+              description:
+                "True when the page references SSO or single sign-on.",
+            },
+            scim: {
+              type: "boolean",
+              description:
+                "True when the page references SCIM provisioning.",
+            },
+            encryption: {
+              type: "boolean",
+              description:
+                "True when the page references encryption, data encrypted at rest, or data encrypted in transit.",
+            },
+            dataResidency: {
+              type: "boolean",
+              description:
+                "True when the page references data residency, data regions, or regional storage controls.",
+            },
           },
           required: [
             "soc2",
@@ -1735,7 +1823,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
             "True when the server responded with 429 Too Many Requests.",
           ).optional(),
           sampleResponse: z.string().describe(
-            "First 1,000 characters of the response body for quick inspection.",
+            "First 1,000 characters of the response body for quick inspection. Use this as a debugging hint only; it may be truncated and should not be treated as a complete page capture.",
           ).optional(),
           error: z.string().describe(
             "Validation or network error when the request could not be completed.",
@@ -2079,23 +2167,49 @@ export class GroundTruthMCP extends McpAgent<Env> {
         },
         outputSchema: {
           pages: z.array(z.object({
-            name: z.string(),
-            url: z.string(),
-            cached: z.boolean().optional(),
-            pricesFound: z.array(z.string()).optional(),
-            plansDetected: z.array(z.string()).optional(),
-            hasFreeOption: z.boolean().optional(),
-            hasFreeTrial: z.boolean().optional(),
-            pageLength: z.number().int().nonnegative().optional(),
-            error: z.string().optional(),
+            name: z.string().describe(
+              "Short vendor or product label from the input page object.",
+            ),
+            url: z.string().describe(
+              "Pricing page URL that was fetched for this named vendor.",
+            ),
+            cached: z.boolean().optional().describe(
+              "True when this page body came from the 5-minute cache.",
+            ),
+            pricesFound: z.array(z.string()).optional().describe(
+              "Distinct price-like strings extracted from this page. These are page-level hints and are not mapped to specific plans.",
+            ),
+            plansDetected: z.array(z.string()).optional().describe(
+              "Lowercased heuristic plan labels detected on this page, such as free, pro, team, or enterprise.",
+            ),
+            hasFreeOption: z.boolean().optional().describe(
+              "True when this page contains visible text suggesting a free plan, free tier, or $0 option.",
+            ),
+            hasFreeTrial: z.boolean().optional().describe(
+              "True when this page contains visible text suggesting a free trial.",
+            ),
+            pageLength: z.number().int().nonnegative().optional().describe(
+              "Size of this fetched page body in characters.",
+            ),
+            error: z.string().optional().describe(
+              "Fetch or parsing error for this specific pricing page when it could not be analyzed.",
+            ),
           })).describe(
             "Per-page pricing signals returned in input order.",
           ),
           summary: z.object({
-            pagesCompared: z.number().int().nonnegative(),
-            pagesWithVisiblePrices: z.number().int().nonnegative(),
-            pagesWithFreeOption: z.number().int().nonnegative(),
-            pagesWithFreeTrial: z.number().int().nonnegative(),
+            pagesCompared: z.number().int().nonnegative().describe(
+              "Number of pricing pages included in the comparison.",
+            ),
+            pagesWithVisiblePrices: z.number().int().nonnegative().describe(
+              "Number of pages where at least one price-like string was detected.",
+            ),
+            pagesWithFreeOption: z.number().int().nonnegative().describe(
+              "Number of pages with page-level text suggesting a free plan, free tier, or $0 option.",
+            ),
+            pagesWithFreeTrial: z.number().int().nonnegative().describe(
+              "Number of pages with page-level text suggesting a free trial.",
+            ),
           }).describe(
             "Aggregate counts across all compared pricing pages.",
           ),
@@ -2422,16 +2536,36 @@ export class GroundTruthMCP extends McpAgent<Env> {
             "Signal names that were detected on the page.",
           ),
           signals: z.object({
-            soc2: z.boolean(),
-            iso27001: z.boolean(),
-            gdpr: z.boolean(),
-            hipaa: z.boolean(),
-            dpa: z.boolean(),
-            subprocessorList: z.boolean(),
-            sso: z.boolean(),
-            scim: z.boolean(),
-            encryption: z.boolean(),
-            dataResidency: z.boolean(),
+            soc2: z.boolean().describe(
+              "True when the page references SOC 2 or SOC2 compliance language.",
+            ),
+            iso27001: z.boolean().describe(
+              "True when the page references ISO 27001 certification or compliance language.",
+            ),
+            gdpr: z.boolean().describe(
+              "True when the page references GDPR or the General Data Protection Regulation.",
+            ),
+            hipaa: z.boolean().describe(
+              "True when the page references HIPAA compliance language.",
+            ),
+            dpa: z.boolean().describe(
+              "True when the page references a data processing agreement or DPA.",
+            ),
+            subprocessorList: z.boolean().describe(
+              "True when the page references subprocessors or a subprocessor list.",
+            ),
+            sso: z.boolean().describe(
+              "True when the page references SSO or single sign-on.",
+            ),
+            scim: z.boolean().describe(
+              "True when the page references SCIM provisioning.",
+            ),
+            encryption: z.boolean().describe(
+              "True when the page references encryption, data encrypted at rest, or data encrypted in transit.",
+            ),
+            dataResidency: z.boolean().describe(
+              "True when the page references data residency, data regions, or regional storage controls.",
+            ),
           }).optional().describe(
             "Boolean scan results for common enterprise compliance and security signals.",
           ),

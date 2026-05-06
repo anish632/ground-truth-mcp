@@ -1,6 +1,6 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.4.1",
+	"version": "0.4.2",
 	"mcpName": "io.github.anish632/ground-truth",
 	"description": "Read-only verification tools for AI agents: free endpoint checks plus paid pricing, compliance, security-header, claim, competitor, and hypothesis verification against live public data.",
 	"keywords": [
