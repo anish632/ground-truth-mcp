@@ -27,7 +27,7 @@ const PAID_RESULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
-const SERVER_VERSION = "0.4.3";
+const SERVER_VERSION = "0.4.4";
 
 // --- Free tier tools ---
 const FREE_TOOLS = ["check_endpoint", "inspect_security_headers"];

@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.anish632/ground-truth",
   "title": "Ground Truth",
-  "description": "Live fact-checking tools for AI agents: free endpoint and security-header checks plus paid pricing, compliance, claim, competitor, and hypothesis verification.",
-  "version": "0.4.3",
+  "description": "Free live fact checks for AI agents: endpoints, security headers, pricing, claims, compliance.",
+  "version": "0.4.4",
   "remotes": [
     {
       "type": "streamable-http",

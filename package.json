@@ -1,8 +1,8 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.4.3",
+	"version": "0.4.4",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "Live fact-checking tools for AI agents: free endpoint and security-header checks plus paid pricing, compliance, claim, competitor, and hypothesis verification.",
+	"description": "Free live fact checks for AI agents: endpoints, security headers, pricing, claims, compliance.",
 	"keywords": [
 		"mcp",
 		"model-context-protocol",
