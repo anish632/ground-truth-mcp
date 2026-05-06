@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.anish632/ground-truth",
   "title": "Ground Truth",
-  "description": "Verification layer for AI agents: endpoint, pricing, compliance, security, and claim checks.",
-  "version": "0.4.2",
+  "description": "Live fact-checking tools for AI agents: free endpoint and security-header checks plus paid pricing, compliance, claim, competitor, and hypothesis verification.",
+  "version": "0.4.3",
   "remotes": [
     {
       "type": "streamable-http",
@@ -11,7 +11,7 @@
       "headers": [
         {
           "name": "X-API-Key",
-          "description": "Optional team-plan API key. Omit this header to use the free endpoint check or agentic x402/xpay pay-per-use for paid tools.",
+          "description": "Optional team-plan API key. Omit this header to use free endpoint and security-header checks or agentic x402/xpay pay-per-use for paid tools.",
           "isRequired": false,
           "isSecret": true
         }

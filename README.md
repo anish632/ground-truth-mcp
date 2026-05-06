@@ -1,12 +1,12 @@
 # Ground Truth
 
-**Verification layer for AI agents.**
+**Live fact-checking tools for AI agents.**
 
-Ground Truth gives AI agents read-only verification tools for live public data: endpoint reachability checks, pricing-page scans, pricing-page comparisons, evidence-backed claim checks, package-market sizing, compliance scans, security-header inspection, named package comparisons, and multi-step hypothesis tests.
+Ground Truth gives AI agents read-only verification tools for live public data: free endpoint reachability checks, free security-header inspection, pricing-page scans, pricing-page comparisons, evidence-backed claim checks, package-market sizing, compliance scans, named package comparisons, and multi-step hypothesis tests.
 
 You can use Ground Truth three ways:
 
-- Free endpoint checks for lightweight verification
+- Free endpoint and security-header checks for lightweight verification
 - Agentic pay-per-use with x402-compatible clients or an xpay proxy
 - A team subscription with `X-API-Key` billing and predictable monthly usage
 
@@ -15,6 +15,21 @@ You can use Ground Truth three ways:
 [![ground-truth-mcp MCP server](https://glama.ai/mcp/servers/anish632/ground-truth-mcp/badges/score.svg)](https://glama.ai/mcp/servers/anish632/ground-truth-mcp)
 
 **Live:** https://ground-truth-mcp.anishdasmail.workers.dev
+
+---
+
+## Try This First
+
+These two tools work without signup or an API key:
+
+- `check_endpoint`: verify that a public URL or API endpoint responds.
+- `inspect_security_headers`: inspect HSTS, CSP, frame protections, and related browser-facing security headers.
+
+Example prompts:
+
+- "Use Ground Truth to check whether https://api.github.com responds."
+- "Use Ground Truth to inspect security headers for https://example.com."
+- "Before recommending this API, use Ground Truth to verify the endpoint is reachable."
 
 ---
 
@@ -125,9 +140,10 @@ Use `verify_claim` against the current AWS support page before treating that as 
 
 ### Free
 
-Free tier includes limited monthly endpoint checks.
+Free tier includes limited monthly endpoint and security-header checks.
 
-- Only `check_endpoint`
+- `check_endpoint`
+- `inspect_security_headers`
 - 100 requests per calendar month
 - Tracked by Cloudflare client IP in production, or `X-Anonymous-Client-Id` for local/dev testing
 - No signup or API key required
@@ -139,7 +155,7 @@ Paid tools also support agentic pay-per-use.
 - Use an x402-compatible MCP client, or put an [xpay MCP proxy](https://docs.xpay.sh/en/products/mcp-monetization) in front of this server
 - Tool pricing starts at `$0.01` per call and varies by tool
 - Best for autonomous agents or variable workloads
-- Includes `estimate_market`, `check_pricing`, `inspect_security_headers`, `compare_pricing_pages`, `compare_competitors`, `verify_claim`, `assess_compliance_posture`, and `test_hypothesis`
+- Includes `estimate_market`, `check_pricing`, `compare_pricing_pages`, `compare_competitors`, `verify_claim`, `assess_compliance_posture`, and `test_hypothesis`
 
 ### Team
 
@@ -363,7 +379,7 @@ If you want the same workflow without running a server, see [claude-skill/](./cl
 | `check_endpoint` | Free | Checks whether a URL or API endpoint exists and responds |
 | `estimate_market` | Paid | Counts packages in npm or PyPI for a search term |
 | `check_pricing` | Paid | Extracts prices, plans, and free-tier signals from a page |
-| `inspect_security_headers` | Paid | Checks common browser-facing security headers on a public URL |
+| `inspect_security_headers` | Free | Checks common browser-facing security headers on a public URL |
 | `compare_pricing_pages` | Paid | Compares multiple live pricing pages side by side |
 | `compare_competitors` | Paid | Compares packages side by side with live metadata |
 | `verify_claim` | Paid | Checks whether live sources support or contradict a claim |

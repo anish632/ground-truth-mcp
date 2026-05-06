@@ -27,10 +27,10 @@ const PAID_RESULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
-const SERVER_VERSION = "0.4.2";
+const SERVER_VERSION = "0.4.3";
 
 // --- Free tier tools ---
-const FREE_TOOLS = ["check_endpoint"];
+const FREE_TOOLS = ["check_endpoint", "inspect_security_headers"];
 const FREE_MONTHLY_LIMIT = 100;
 const PRO_MONTHLY_LIMIT = 5000;
 const TEAM_PLAN_MONTHLY_PRICE_USD = 9;
@@ -39,14 +39,13 @@ const XPAY_UPSTREAM_HEADER = "X-Ground-Truth-Xpay-Secret";
 const PUBLIC_APP_ORIGIN = "https://ground-truth-mcp.anishdasmail.workers.dev";
 const SERVER_CARD_ICON_PATH = "/icon.svg";
 const SERVER_CARD_DESCRIPTION =
-  "Live verification tools for AI agents: endpoint checks, pricing analysis, " +
-  "security headers, compliance signals, claim checks, and evidence-backed " +
-  "competitive research against public web data.";
+  "Live fact-checking tools for AI agents. Try free endpoint checks and " +
+  "security-header inspections, then use paid pricing, compliance, claim, " +
+  "hypothesis, and competitor verification against public web data.";
 
 const AGENTIC_TOOL_PRICES_USD = {
   estimate_market: 0.01,
   check_pricing: 0.02,
-  inspect_security_headers: 0.02,
   compare_competitors: 0.03,
   compare_pricing_pages: 0.04,
   verify_claim: 0.05,
@@ -2038,11 +2037,10 @@ export class GroundTruthMCP extends McpAgent<Env> {
     );
 
     // ───────────────────────────────────────────────
-    // PAID $0.02: inspect_security_headers
+    // FREE: inspect_security_headers
     // ───────────────────────────────────────────────
-    registerPaidTool(
+    this.server.registerTool(
       "inspect_security_headers",
-      AGENTIC_TOOL_PRICES_USD.inspect_security_headers,
       {
         title: "Security Header Inspection",
         description:
@@ -2972,6 +2970,7 @@ export default {
             website: homepage,
             icon,
             pricing: `${publicOrigin}/pricing`,
+            freeTools: FREE_TOOLS,
             upstreamMode: "xpay_proxy",
             upstreamAuthHeader: XPAY_UPSTREAM_HEADER,
           }
@@ -2981,6 +2980,7 @@ export default {
             website: homepage,
             icon,
             pricing: `${publicOrigin}/pricing`,
+            freeTools: FREE_TOOLS,
             teamPlan: {
               priceUsdMonthly: TEAM_PLAN_MONTHLY_PRICE_USD,
               quota: PRO_MONTHLY_LIMIT,
@@ -3011,7 +3011,7 @@ export default {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth — Pricing</title>
-  <meta name="description" content="Verification layer for AI agents with free endpoint checks, agentic pay-per-use, and a team subscription for higher-volume verification.">
+  <meta name="description" content="Live fact-checking tools for AI agents with free endpoint and security-header checks, agentic pay-per-use, and a team subscription for higher-volume verification.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -3142,21 +3142,22 @@ export default {
     <div class="hero">
       <div class="eyebrow">Verification Layer For AI Agents</div>
       <h1>Choose free checks, agentic pay-per-use, or a team plan.</h1>
-      <p class="sub">Ground Truth gives AI agents live verification tools. Start with free endpoint checks, pay per tool call with x402-compatible clients, or use a team API key for broader monthly usage.</p>
+      <p class="sub">Ground Truth gives AI agents live verification tools. Start with free endpoint and security-header checks, pay per tool call with x402-compatible clients, or use a team API key for broader monthly usage.</p>
     </div>
 
     <div class="plans">
       <div class="plan">
         <h2>Free</h2>
         <div class="price">$0</div>
-        <p class="desc">Free tier includes limited monthly endpoint checks.</p>
+        <p class="desc">Free tier includes limited monthly endpoint and security-header checks.</p>
         <ul>
-          <li>Only <strong>check_endpoint</strong></li>
+          <li><strong>check_endpoint</strong></li>
+          <li><strong>inspect_security_headers</strong></li>
           <li>100 requests per calendar month</li>
           <li>Tracked by Cloudflare client IP in production, or an anonymous client identifier in local/dev</li>
           <li>No API key required</li>
         </ul>
-        <a href="/mcp" class="btn btn-outline">Try Free Endpoint Check</a>
+        <a href="/mcp" class="btn btn-outline">Try Free Checks</a>
       </div>
 
       <div class="plan plan-pro">
@@ -3173,7 +3174,6 @@ export default {
           <strong>Example tool prices</strong><br>
           <code>estimate_market</code> $${AGENTIC_TOOL_PRICES_USD.estimate_market.toFixed(2)}<br>
           <code>check_pricing</code> $${AGENTIC_TOOL_PRICES_USD.check_pricing.toFixed(2)}<br>
-          <code>inspect_security_headers</code> $${AGENTIC_TOOL_PRICES_USD.inspect_security_headers.toFixed(2)}<br>
           <code>compare_pricing_pages</code> $${AGENTIC_TOOL_PRICES_USD.compare_pricing_pages.toFixed(2)}<br>
           <code>verify_claim</code> $${AGENTIC_TOOL_PRICES_USD.verify_claim.toFixed(2)}
         </div>
@@ -3198,7 +3198,7 @@ export default {
     </div>
 
     <div class="note">
-      <strong>How to choose:</strong> Free is for lightweight endpoint checks. <strong>Agentic</strong> is for pay-per-tool-call automation with x402 or xpay. <strong>Team</strong> is the predictable monthly plan for people and internal tools that prefer API-key billing.
+      <strong>How to choose:</strong> Free is for lightweight endpoint and security-header checks. <strong>Agentic</strong> is for pay-per-tool-call automation with x402 or xpay. <strong>Team</strong> is the predictable monthly plan for people and internal tools that prefer API-key billing.
     </div>
 
     <div class="faq">
@@ -3214,7 +3214,7 @@ export default {
         </div>
         <div class="faq-item">
           <dt>Do I need an API key for the free check?</dt>
-          <dd>No. <strong>check_endpoint</strong> works immediately with no signup, up to 100 requests per calendar month.</dd>
+          <dd>No. <strong>check_endpoint</strong> and <strong>inspect_security_headers</strong> work immediately with no signup, up to 100 requests per calendar month.</dd>
         </div>
         <div class="faq-item">
           <dt>How do agentic payments work?</dt>
@@ -3222,7 +3222,7 @@ export default {
         </div>
         <div class="faq-item">
           <dt>What happens if I cancel the team plan?</dt>
-          <dd>Your team API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong> or switch to the agentic pay-per-use path.</dd>
+          <dd>Your team API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong> and <strong>inspect_security_headers</strong> or switch to the agentic pay-per-use path.</dd>
         </div>
       </dl>
     </div>
@@ -3540,7 +3540,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth — Verification Layer for AI Agents</title>
-  <meta name="description" content="Verification layer for AI agents with free endpoint checks, agentic pay-per-use, and a team subscription for pricing, compliance, and competitive verification.">
+  <meta name="description" content="Live fact-checking tools for AI agents with free endpoint and security-header checks, agentic pay-per-use, and a team subscription for pricing, compliance, and competitive verification.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -3801,7 +3801,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     <div class="hero">
       <div class="eyebrow">Verification Layer For AI Agents</div>
       <h1>Verify before your agents act.</h1>
-      <p class="sub">Ground Truth gives agents live verification tools for pricing, compliance, security posture, vendor diligence, and market checks. Use the free endpoint check, pay per tool call with x402-compatible clients, or use a team API key for predictable monthly access.</p>
+      <p class="sub">Ground Truth gives agents live verification tools for pricing, compliance, security posture, vendor diligence, and market checks. Use the free endpoint and security-header checks, pay per tool call with x402-compatible clients, or use a team API key for predictable monthly access.</p>
       <div class="cta-row">
         <a href="/pricing" class="btn btn-primary">View Pricing</a>
         <a href="#mcp-setup" class="btn btn-secondary">See MCP Setup</a>
@@ -3906,17 +3906,18 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
 
     <section id="pricing">
       <h2>Free, Agentic, and Team</h2>
-      <p class="section-intro">Use the free endpoint check, pay per tool call with x402-compatible automation, or subscribe to a team plan for predictable monthly usage.</p>
+      <p class="section-intro">Use the free endpoint and security-header checks, pay per tool call with x402-compatible automation, or subscribe to a team plan for predictable monthly usage.</p>
       <div class="pricing-grid">
         <div class="plan">
           <div class="label">Free</div>
           <h3>Endpoint checks</h3>
           <div class="price">$0</div>
-          <p>Free tier includes limited monthly endpoint checks.</p>
+          <p>Free tier includes limited monthly endpoint and security-header checks.</p>
           <ul>
-            <li>Only <code>check_endpoint</code></li>
+            <li><code>check_endpoint</code></li>
+            <li><code>inspect_security_headers</code></li>
             <li>100 requests per calendar month</li>
-            <li>No API key required for the free check</li>
+            <li>No API key required for free checks</li>
           </ul>
         </div>
         <div class="plan pro">

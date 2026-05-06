@@ -1,12 +1,12 @@
 # Ground Truth API Guide
 
-**Verification layer for AI agents.**
+**Live fact-checking tools for AI agents.**
 
 Ground Truth gives AI agents a verification layer they can call before answering, recommending, or taking action.
 
 Ground Truth supports three access modes:
 
-- Free endpoint checks
+- Free endpoint and security-header checks
 - Agentic pay-per-use with x402-compatible clients or an xpay proxy
 - Team API-key billing with a monthly subscription
 
@@ -36,12 +36,13 @@ If the answer depends on live public data, Ground Truth is designed to check it 
 
 ### Free
 
-Free tier includes limited monthly endpoint checks.
+Free tier includes limited monthly endpoint and security-header checks.
 
-- Only `check_endpoint`
+- `check_endpoint`
+- `inspect_security_headers`
 - 100 requests per calendar month
 - Tracked by Cloudflare client IP in production, or `X-Anonymous-Client-Id` for local/dev testing
-- No API key required for the free endpoint check
+- No API key required for free checks
 
 ### Agentic pay-per-use
 
@@ -51,6 +52,19 @@ Paid tools also support agentic pay-per-use.
 - Tool pricing starts at `$0.01` per call and varies by tool
 - Best for autonomous agents and variable workloads
 - Includes every paid verification tool
+
+## Try This First
+
+These two calls work without signup or an API key:
+
+- `check_endpoint` for "Does this URL respond right now?"
+- `inspect_security_headers` for "What security headers does this public site expose?"
+
+Good first prompts:
+
+- "Use Ground Truth to check whether https://api.github.com responds."
+- "Use Ground Truth to inspect security headers for https://example.com."
+- "Before recommending this endpoint, verify it with Ground Truth."
 
 ### Team
 
@@ -222,7 +236,7 @@ Expected behavior:
 
 ## Limits and Access Rules
 
-- Free access only applies to `check_endpoint`
+- Free access applies to `check_endpoint` and `inspect_security_headers`
 - Free access is limited to 100 requests per calendar month
 - Free usage is tracked by Cloudflare client IP in production, or `X-Anonymous-Client-Id` for local/dev testing
 - Free requests over the monthly limit return `429`
@@ -442,7 +456,7 @@ Returns prices found, plan names, free-option signals, free-trial signals, and c
 
 ---
 
-### `inspect_security_headers` (Paid)
+### `inspect_security_headers` (Free)
 
 Checks common browser-facing security headers on a public URL.
 
