@@ -60,12 +60,6 @@ Ground Truth is strongest when paired with a broader discovery or browser tool:
 
 These are complementary to Ground Truth rather than substitutes: they help you find or render the page, while Ground Truth helps you verify the resulting claim.
 
-If you are filling in Glama related servers for this project, start with these three:
-
-- `Tavily MCP Server`
-- `Firecrawl MCP Server`
-- `mcp-server-browserbase`
-
 ---
 
 ## Why AI Agents Need Verification
@@ -408,7 +402,7 @@ Ground Truth keeps the current Cloudflare Workers architecture:
 Ground Truth is set up for multiple discovery and monetization paths:
 
 - Official MCP Registry publishing through `server.json` for ecosystem-wide discovery.
-- Smithery URL publishing. This server exposes Streamable HTTP at `/mcp` and a static server card at `/.well-known/mcp/server-card.json` for metadata fallback.
+- Smithery publishing. `smithery.yaml` defines the HTTP config schema (optional `X-API-Key`) for Smithery's Install button and release flow. Use Smithery's **Publish** button in the dashboard to create a new release after deploying.
 - xpay MCP monetization. You can register the live `/mcp` URL with xpay to get a managed pay-per-tool proxy without changing the server code.
 - MCP Market directory listing for additional discovery.
 - Apify is optional if you want a separate marketplace-native Actor version later; the current project stays optimized for remote MCP delivery rather than an Actor-first runtime.

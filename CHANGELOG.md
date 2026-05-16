@@ -8,6 +8,13 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - No entries yet.
 
+## [0.4.5] - 2026-05-15
+
+- Add `smithery.yaml` to enable Smithery Install button config schema and release publishing.
+- Expand `server.json` description with all nine tool names for richer MCP registry search matching.
+- Expand `package.json` keywords with `mcp-server`, `hypothesis-testing`, `vendor-diligence`, `market-research`, `live-data`, `security-headers`, `pricing-intelligence`, `x402`, and `cloudflare-workers`.
+- Remove internal Glama setup note from README.
+
 ## [0.4.0] - 2026-04-29
 
 - Add hybrid monetization with x402-compatible pay-per-use and a repositioned team subscription flow.

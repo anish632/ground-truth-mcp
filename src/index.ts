@@ -27,7 +27,7 @@ const PAID_RESULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
-const SERVER_VERSION = "0.4.4";
+const SERVER_VERSION = "0.4.5";
 
 // --- Free tier tools ---
 const FREE_TOOLS = ["check_endpoint", "inspect_security_headers"];
@@ -42,6 +42,20 @@ const SERVER_CARD_DESCRIPTION =
   "Live fact-checking tools for AI agents. Try free endpoint checks and " +
   "security-header inspections, then use paid pricing, compliance, claim, " +
   "hypothesis, and competitor verification against public web data.";
+const REPUTABLE_CRAWLER_USER_AGENTS = [
+  "OAI-SearchBot",
+  "GPTBot",
+  "ChatGPT-User",
+  "ClaudeBot",
+  "Claude-SearchBot",
+  "Claude-User",
+  "PerplexityBot",
+  "Perplexity-User",
+  "Google-Extended",
+  "Googlebot",
+  "Bingbot",
+  "CCBot",
+] as const;
 
 const AGENTIC_TOOL_PRICES_USD = {
   estimate_market: 0.01,
@@ -954,6 +968,74 @@ function withJsonHeaders(init: ResponseInit = {}): ResponseInit {
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), withJsonHeaders(init));
+}
+
+function textResponse(body: string, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("Content-Type", "text/plain; charset=utf-8");
+  headers.set("Cache-Control", "public, max-age=3600");
+  return new Response(body, { ...init, headers });
+}
+
+function getPublicOriginForRequest(url: URL): string {
+  return IS_XPAY_UPSTREAM ? PUBLIC_APP_ORIGIN : url.origin;
+}
+
+function getSitemapUrl(url: URL): string {
+  return `${getPublicOriginForRequest(url)}/sitemap.xml`;
+}
+
+function getRobotsTxt(url: URL): string {
+  const allowRules = REPUTABLE_CRAWLER_USER_AGENTS
+    .map(userAgent => `User-agent: ${userAgent}\nAllow: /`)
+    .join("\n\n");
+
+  return `${allowRules}
+
+User-agent: *
+Allow: /
+
+Sitemap: ${getSitemapUrl(url)}
+`;
+}
+
+function getLlmsTxt(url: URL): string {
+  const publicOrigin = getPublicOriginForRequest(url);
+  return `# Ground Truth
+
+> Live fact-checking tools for AI agents: endpoints, security headers, pricing, claims, compliance, market checks, and competitor verification.
+
+Sitemap: ${getSitemapUrl(url)}
+
+## Primary Pages
+
+- [Home](${publicOrigin}/): Overview, pricing summary, MCP setup, and example verification workflows.
+- [Pricing](${publicOrigin}/pricing): Free checks, agentic pay-per-use, and team plan details.
+- [MCP Server Card](${publicOrigin}/.well-known/mcp/server-card.json): Machine-readable tool metadata.
+`;
+}
+
+function getSitemapXml(url: URL): string {
+  const publicOrigin = getPublicOriginForRequest(url);
+  const sitemapEntries = [
+    { loc: `${publicOrigin}/`, priority: "1.0" },
+    { loc: `${publicOrigin}/pricing`, priority: "0.8" },
+    { loc: `${publicOrigin}/.well-known/mcp/server-card.json`, priority: "0.6" },
+    { loc: `${publicOrigin}/llms.txt`, priority: "0.5" },
+  ];
+
+  const urls = sitemapEntries
+    .map(entry => `  <url>
+    <loc>${entry.loc}</loc>
+    <priority>${entry.priority}</priority>
+  </url>`)
+    .join("\n");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls}
+</urlset>
+`;
 }
 
 function structuredToolResult<T extends Record<string, unknown>>(structuredContent: T) {
@@ -2791,6 +2873,25 @@ export default {
     const isTrustedXpayPathRequest = hasTrustedXpayPath(url);
     const isTrustedXpayQueryRequest = hasTrustedXpayQuery(url);
     const servedMcpPath = isTrustedXpayPathRequest ? url.pathname : "/mcp";
+
+    if (request.method === "GET" || request.method === "HEAD") {
+      if (url.pathname === "/robots.txt") {
+        return textResponse(getRobotsTxt(url));
+      }
+
+      if (url.pathname === "/llms.txt") {
+        return textResponse(getLlmsTxt(url));
+      }
+
+      if (url.pathname === "/sitemap.xml") {
+        return new Response(getSitemapXml(url), {
+          headers: {
+            "content-type": "application/xml; charset=utf-8",
+            "cache-control": "public, max-age=3600",
+          },
+        });
+      }
+    }
 
     // ───────────────────────────────────────────────
     // MCP endpoint with billing and usage enforcement
