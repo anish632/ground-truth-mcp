@@ -1,6 +1,6 @@
 # Ground Truth API Guide
 
-**Live fact-checking tools for AI agents.**
+**Live fact-checking tools for AI agents. Start with one free tool call.**
 
 Ground Truth gives AI agents a verification layer they can call before answering, recommending, or taking action.
 
@@ -11,6 +11,43 @@ Ground Truth supports three access modes:
 - Team API-key billing with a monthly subscription
 
 This guide covers what Ground Truth verifies, how the access modes differ, direct API examples, MCP setup, and every available tool.
+
+---
+
+## 60-Second Quickstart
+
+The fastest first success is the free `check_endpoint` tool. It does not need signup or an API key.
+
+1. Add Ground Truth to an MCP client that supports remote Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
+    }
+  }
+}
+```
+
+2. Restart or refresh the MCP client so it loads the server.
+3. Paste this prompt:
+
+> Use Ground Truth to call the `check_endpoint` tool with `url` set to `https://api.github.com`. Return the URL, HTTP status, whether it was accessible, and response time.
+
+Expected output shape:
+
+```json
+{
+  "url": "https://api.github.com/",
+  "accessible": true,
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "responseTimeMs": 120
+}
+```
+
+`responseTimeMs` will vary. A first successful tool call means your MCP client is connected and Ground Truth is usable.
 
 ---
 
@@ -53,19 +90,6 @@ Paid tools also support agentic pay-per-use.
 - Best for autonomous agents and variable workloads
 - Includes every paid verification tool
 
-## Try This First
-
-These two calls work without signup or an API key:
-
-- `check_endpoint` for "Does this URL respond right now?"
-- `inspect_security_headers` for "What security headers does this public site expose?"
-
-Good first prompts:
-
-- "Use Ground Truth to check whether https://api.github.com responds."
-- "Use Ground Truth to inspect security headers for https://example.com."
-- "Before recommending this endpoint, verify it with Ground Truth."
-
 ### Team
 
 Team billing uses a monthly subscription and `X-API-Key`.
@@ -79,13 +103,24 @@ To use the team plan, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pr
 
 ---
 
+## Try This First
+
+These two calls work without signup or an API key:
+
+- `check_endpoint` for "Does this URL respond right now?"
+- `inspect_security_headers` for "What security headers does this public site expose?"
+
+Copy-paste this first prompt:
+
+> Use Ground Truth to call the `check_endpoint` tool with `url` set to `https://api.github.com`. Return the URL, HTTP status, whether it was accessible, and response time.
+
+---
+
 ## API Examples
 
 ### Direct API with `curl`
 
-Verify a pricing claim:
-
-These examples use the team plan with `X-API-Key`. For agentic pay-per-use, use an x402-capable MCP client or an xpay proxy.
+Call the free `check_endpoint` tool with no API key:
 
 ```bash
 SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
@@ -109,14 +144,13 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -H "X-API-Key: $GROUND_TRUTH_API_KEY" \
   -d '{
     "jsonrpc": "2.0",
     "method": "tools/call",
     "params": {
-      "name": "check_pricing",
+      "name": "check_endpoint",
       "arguments": {
-        "url": "https://stripe.com/pricing"
+        "url": "https://api.github.com"
       }
     },
     "id": 1
@@ -125,7 +159,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
 
 ### JavaScript `fetch`
 
-Compare package popularity:
+Call the free `check_endpoint` tool from code:
 
 ```javascript
 const initResponse = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/mcp", {
@@ -161,16 +195,14 @@ const response = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/
     "Accept": "application/json, text/event-stream",
     "Content-Type": "application/json",
     "Mcp-Session-Id": sessionId,
-    "X-API-Key": process.env.GROUND_TRUTH_API_KEY,
   },
   body: JSON.stringify({
     jsonrpc: "2.0",
     method: "tools/call",
     params: {
-      name: "compare_competitors",
+      name: "check_endpoint",
       arguments: {
-        packages: ["react", "vue"],
-        registry: "npm",
+        url: "https://api.github.com",
       },
     },
     id: 1,
@@ -234,6 +266,40 @@ Expected behavior:
 
 ---
 
+## Concrete Use Case: Grounded Source Lookup
+
+Use Ground Truth when an agent needs to verify that a source or endpoint exists before using it in an answer, support reply, or citation-ready research context.
+
+Example input:
+
+```json
+{
+  "name": "check_endpoint",
+  "arguments": {
+    "url": "https://api.github.com"
+  }
+}
+```
+
+Example output shape:
+
+```json
+{
+  "url": "https://api.github.com/",
+  "accessible": true,
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "responseTimeMs": 120,
+  "authRequired": false,
+  "rateLimited": false,
+  "sampleResponse": "{\"current_user_url\":\"https://api.github.com/user\"..."
+}
+```
+
+The result gives the agent source-backed context that the URL was reachable at call time plus a short response sample for grounding. It does not prove authenticated behavior, page correctness, or long-term availability.
+
+---
+
 ## Limits and Access Rules
 
 - Free access applies to `check_endpoint` and `inspect_security_headers`
@@ -265,16 +331,13 @@ The server also publishes a metadata card at:
 
 ### Claude Desktop
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+For the free first call, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
-      "headers": {
-        "X-API-Key": "gt_live_your_key_here"
-      }
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
     }
   }
 }
@@ -282,20 +345,19 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ### Cursor
 
-Add to `.cursor/mcp.json` or `~/.cursor/mcp.json`:
+For the free first call, add to `.cursor/mcp.json` or `~/.cursor/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
-      "headers": {
-        "X-API-Key": "gt_live_your_key_here"
-      }
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
     }
   }
 }
 ```
+
+Only add `X-API-Key` when you are using paid tools through the team plan.
 
 ---
 
@@ -575,6 +637,38 @@ Use [test-usage-enforcement.sh](./test-usage-enforcement.sh) for lightweight req
 4. Inactive team subscription is rejected
 5. Free quota exceeded returns `429`
 6. Active team key can call all paid tools
+
+---
+
+## Troubleshooting
+
+### Server not connecting
+
+- Confirm your MCP client supports remote Streamable HTTP servers.
+- Confirm the URL is exactly `https://ground-truth-mcp.anishdasmail.workers.dev/mcp`.
+- Restart or refresh the MCP client after editing its config.
+- Check metadata reachability with `curl -I https://ground-truth-mcp.anishdasmail.workers.dev/.well-known/mcp/server-card.json`.
+
+### No tool calls appearing
+
+- Use the copy-paste prompt above and name the tool: `check_endpoint`.
+- Make sure Ground Truth is enabled in the client's tool list.
+- Start with the free tool and no `X-API-Key`.
+- If the model answers from memory, ask it to call `check_endpoint` explicitly.
+
+### Missing environment variables
+
+- Hosted free checks do not need environment variables or an API key.
+- Local deployments need the `API_KEYS` KV binding for quota tracking.
+- Team billing needs `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`.
+- Production x402 payments should set `GROUND_TRUTH_X402_NETWORK` and `GROUND_TRUTH_X402_RECIPIENT`.
+
+### Unsupported MCP client
+
+- Use the direct MCP HTTP curl example above to confirm the server works.
+- Use a client with remote Streamable HTTP support for the hosted server.
+- If a directory requires stdio, use `npm run start:glama:stdio`.
+- For paid tools in clients without native x402 support, use an xpay proxy in front of the live `/mcp` URL.
 
 ---
 

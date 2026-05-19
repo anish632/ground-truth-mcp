@@ -2,7 +2,7 @@
 	"name": "ground-truth-mcp",
 	"version": "0.4.5",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "Free live fact checks for AI agents: endpoints, security headers, pricing, claims, compliance.",
+	"description": "Start with one free MCP tool call: verify endpoints, then check pricing, claims, compliance, markets, and competitors.",
 	"keywords": [
 		"mcp",
 		"mcp-server",

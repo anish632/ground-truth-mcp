@@ -10,7 +10,7 @@ Ground Truth is positioned publicly as a verification layer for AI agents. Keep 
 
 - Billing and API key routes are implemented in `src/index.ts`
 - API keys are stored in the `API_KEYS` KV namespace
-- Free access covers `check_endpoint`
+- Free access covers `check_endpoint` and `inspect_security_headers`
 - Paid tools support both team API-key billing and x402-compatible pay-per-use
 - The server publishes MCP metadata at `/.well-known/mcp/server-card.json`
 
@@ -103,6 +103,18 @@ curl -X POST http://localhost:8787/mcp \
   -H "Mcp-Session-Id: $MCP_SESSION_ID" \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://example.com"}},"id":1}'
 ```
+
+First-call activation smoke test:
+
+```bash
+curl -X POST http://localhost:8787/mcp \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: $MCP_SESSION_ID" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://api.github.com"}},"id":1}'
+```
+
+The activation event is a successful `check_endpoint` result with `accessible`, `status`, and `responseTimeMs` in the returned structured content.
 
 Agentic unpaid paid-tool smoke test:
 
@@ -205,7 +217,6 @@ stripe trigger checkout.session.completed
 
 - `estimate_market`
 - `check_pricing`
-- `inspect_security_headers`
 - `compare_pricing_pages`
 - `compare_competitors`
 - `verify_claim`
@@ -248,7 +259,6 @@ Example:
 - Start with per-tool pricing that matches the Worker metadata:
   - `estimate_market` → `$0.01`
   - `check_pricing` → `$0.02`
-  - `inspect_security_headers` → `$0.02`
   - `compare_competitors` → `$0.03`
   - `compare_pricing_pages` → `$0.04`
   - `verify_claim` → `$0.05`
@@ -281,6 +291,21 @@ Example:
 - Point Smithery to `https://ground-truth-mcp.anishdasmail.workers.dev/mcp`
 - The `/.well-known/mcp/server-card.json` route is available as metadata fallback
 - If Smithery's scan is blocked by Cloudflare bot protection, allow `SmitheryBot/1.0` or rely on the static server card
+- Use this first-call profile note: `No API key is required for check_endpoint or inspect_security_headers. Start by calling check_endpoint with url=https://api.github.com.`
+
+### Profile copy snippets
+
+Short description:
+
+> Give AI agents one free first check: call `check_endpoint` to verify a public URL responds, then use paid tools for pricing, compliance, claims, package-market, and competitor checks.
+
+Quickstart:
+
+> Use Ground Truth to call `check_endpoint` with `url` set to `https://api.github.com`. Return the URL, status, accessible boolean, and response time.
+
+Release note:
+
+> Improved first-call activation with a no-key 60-second quickstart, one copy-paste `check_endpoint` prompt, example input/output, clearer free-vs-paid setup, and troubleshooting for MCP client connection issues.
 
 ### MCP Market
 

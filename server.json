@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.anish632/ground-truth",
   "title": "Ground Truth",
-  "description": "Live fact-checks for AI agents: endpoints, security headers, pricing, claims, compliance, markets.",
+  "description": "Start with one free MCP tool call: use check_endpoint to verify a public URL responds, then use paid tools for pricing, claims, compliance, markets, and competitors.",
   "version": "0.4.5",
   "remotes": [
     {
@@ -11,7 +11,7 @@
       "headers": [
         {
           "name": "X-API-Key",
-          "description": "Optional team-plan API key. Omit this header to use free endpoint and security-header checks or agentic x402/xpay pay-per-use for paid tools.",
+          "description": "Optional team-plan API key. Leave this empty for the first free tool call with check_endpoint or inspect_security_headers. Add it only for team-plan paid tools; paid tools can also use x402/xpay pay-per-use.",
           "isRequired": false,
           "isSecret": true
         }

@@ -39,9 +39,9 @@ const XPAY_UPSTREAM_HEADER = "X-Ground-Truth-Xpay-Secret";
 const PUBLIC_APP_ORIGIN = "https://ground-truth-mcp.anishdasmail.workers.dev";
 const SERVER_CARD_ICON_PATH = "/icon.svg";
 const SERVER_CARD_DESCRIPTION =
-  "Live fact-checking tools for AI agents. Try free endpoint checks and " +
-  "security-header inspections, then use paid pricing, compliance, claim, " +
-  "hypothesis, and competitor verification against public web data.";
+  "Start with one free MCP tool call: check whether a public endpoint " +
+  "responds or inspect security headers, then use paid pricing, claim, " +
+  "compliance, market, competitor, and hypothesis checks against public web data.";
 const REPUTABLE_CRAWLER_USER_AGENTS = [
   "OAI-SearchBot",
   "GPTBot",
@@ -131,9 +131,9 @@ const SERVER_CARD_TOOLS = [
     name: "check_endpoint",
     title: "Endpoint Reachability Check",
     description:
-      "Perform one live, unauthenticated fetch against a public URL or API " +
-      "endpoint and report status, content type, timing, and likely auth or " +
-      "rate-limit signals.",
+      "Call this first to verify that a public URL or API endpoint responds. " +
+      "It performs one live, unauthenticated fetch and returns status, content " +
+      "type, timing, likely auth or rate-limit signals, and a short response sample.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -206,8 +206,8 @@ const SERVER_CARD_TOOLS = [
     name: "estimate_market",
     title: "Package Market Search",
     description:
-      "Search npm or PyPI to estimate how crowded a package category is " +
-      "before you claim that a market is empty, niche, or competitive.",
+      "Call this when you have a package category or search phrase and need " +
+      "live npm or PyPI result counts before calling a market empty, niche, or crowded.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -274,8 +274,8 @@ const SERVER_CARD_TOOLS = [
     name: "check_pricing",
     title: "Pricing Page Scan",
     description:
-      "Fetch a public pricing page and extract first-pass pricing signals " +
-      "before you quote plan costs, free tiers, or plan names.",
+      "Call this when you already have a public pricing URL and need visible " +
+      "price strings, plan-name hints, and free/free-trial signals before quoting them.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -334,8 +334,8 @@ const SERVER_CARD_TOOLS = [
     name: "inspect_security_headers",
     title: "Security Header Inspection",
     description:
-      "Fetch a public URL and inspect security-relevant response headers " +
-      "before you claim that a product or endpoint has a strong browser-facing baseline.",
+      "Call this to inspect security-relevant response headers on a public URL " +
+      "before making a browser-facing security-header claim.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -412,8 +412,8 @@ const SERVER_CARD_TOOLS = [
     name: "compare_pricing_pages",
     title: "Pricing Page Comparison",
     description:
-      "Compare two to five public pricing pages side by side before you " +
-      "make competitive pricing or packaging claims.",
+      "Call this when you need to compare two to five public pricing pages " +
+      "before making a competitive pricing or packaging claim.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -538,8 +538,8 @@ const SERVER_CARD_TOOLS = [
     name: "compare_competitors",
     title: "Named Package Comparison",
     description:
-      "Compare two or more exact package names side by side using live npm " +
-      "or PyPI metadata.",
+      "Call this when you already know exact package names and need live npm " +
+      "or PyPI metadata side by side.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -607,8 +607,8 @@ const SERVER_CARD_TOOLS = [
     name: "verify_claim",
     title: "Claim Support Check",
     description:
-      "Check whether a factual claim is supported by a specific set of " +
-      "public evidence URLs that you already have.",
+      "Call this when you have a factual claim plus specific public evidence " +
+      "URLs and need a source-by-source support check.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -686,8 +686,8 @@ const SERVER_CARD_TOOLS = [
     name: "assess_compliance_posture",
     title: "Compliance Signal Scan",
     description:
-      "Scan a public security, trust, compliance, or legal page for common " +
-      "enterprise buying signals before you claim a vendor supports a particular posture.",
+      "Call this to scan a public security, trust, compliance, or legal page " +
+      "for common enterprise signals before repeating a vendor posture claim.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -797,8 +797,8 @@ const SERVER_CARD_TOOLS = [
     name: "test_hypothesis",
     title: "Multi-step Hypothesis Test",
     description:
-      "Run a small verification plan made of concrete live checks and " +
-      "summarize whether a hypothesis is supported.",
+      "Call this when one hypothesis needs several explicit live checks, such " +
+      "as endpoint reachability, npm result counts, or exact page-text matches.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -3258,7 +3258,7 @@ export default {
           <li>Tracked by Cloudflare client IP in production, or an anonymous client identifier in local/dev</li>
           <li>No API key required</li>
         </ul>
-        <a href="/mcp" class="btn btn-outline">Try Free Checks</a>
+        <a href="/#quickstart" class="btn btn-outline">Try Free Checks</a>
       </div>
 
       <div class="plan plan-pro">
@@ -3902,17 +3902,61 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     <div class="hero">
       <div class="eyebrow">Verification Layer For AI Agents</div>
       <h1>Verify before your agents act.</h1>
-      <p class="sub">Ground Truth gives agents live verification tools for pricing, compliance, security posture, vendor diligence, and market checks. Use the free endpoint and security-header checks, pay per tool call with x402-compatible clients, or use a team API key for predictable monthly access.</p>
+      <p class="sub">Ground Truth gives agents live verification tools for pricing, compliance, security posture, vendor diligence, and market checks. Start with one free endpoint check, then use paid tools through x402, xpay, or a team API key when you need broader verification.</p>
       <div class="cta-row">
-        <a href="/pricing" class="btn btn-primary">View Pricing</a>
+        <a href="#quickstart" class="btn btn-primary">Try The First Call</a>
         <a href="#mcp-setup" class="btn btn-secondary">See MCP Setup</a>
       </div>
       <div class="hero-meta">
+        <span>No API key for first call</span>
         <span>Live data checks</span>
         <span>Agentic pay-per-use or team plan</span>
-        <span>Cloudflare Workers</span>
       </div>
     </div>
+
+    <section id="quickstart">
+      <h2>60-second quickstart</h2>
+      <p class="section-intro">Use the free <code>check_endpoint</code> tool first. It verifies that your MCP client is connected and that Ground Truth can return source-backed context from a public URL.</p>
+      <div class="code-grid">
+        <div class="code-card">
+          <h3>1. Add the remote MCP server</h3>
+          <p>Use this no-key configuration for the free first call.</p>
+          <div class="code-block">{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
+    }
+  }
+}</div>
+        </div>
+        <div class="code-card">
+          <h3>2. Paste this first prompt</h3>
+          <p>Name the tool so the agent calls it instead of answering from memory.</p>
+          <div class="code-block">Use Ground Truth to call the check_endpoint tool with url set to https://api.github.com. Return the URL, HTTP status, whether it was accessible, and response time.</div>
+        </div>
+        <div class="code-card">
+          <h3>Example input</h3>
+          <p>The client should call this tool with this argument.</p>
+          <div class="code-block">{
+  "name": "check_endpoint",
+  "arguments": {
+    "url": "https://api.github.com"
+  }
+}</div>
+        </div>
+        <div class="code-card">
+          <h3>Example output shape</h3>
+          <p>Response time varies by run.</p>
+          <div class="code-block">{
+  "url": "https://api.github.com/",
+  "accessible": true,
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "responseTimeMs": 120
+}</div>
+        </div>
+      </div>
+    </section>
 
     <section id="what-it-verifies">
       <h2>What Ground Truth verifies</h2>
@@ -4048,7 +4092,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
       </div>
       <div class="link-row">
         <a href="/pricing" class="btn btn-primary">See All Pricing</a>
-        <a href="/mcp" class="btn btn-secondary">Try The Free Check</a>
+        <a href="#quickstart" class="btn btn-secondary">Try The Free Check</a>
       </div>
     </section>
 
@@ -4145,28 +4189,22 @@ console.log(result);</div>
       <div class="setup-grid">
         <div class="setup-card">
           <h3>Claude Desktop</h3>
-          <p>Add Ground Truth to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>.</p>
+          <p>Add Ground Truth to <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>. No key is needed for the free first call.</p>
           <pre>{
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
-      "headers": {
-        "X-API-Key": "gt_live_your_key_here"
-      }
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
     }
   }
 }</pre>
         </div>
         <div class="setup-card">
           <h3>Cursor</h3>
-          <p>Add Ground Truth to <code>.cursor/mcp.json</code> in your project or <code>~/.cursor/mcp.json</code> globally.</p>
+          <p>Add Ground Truth to <code>.cursor/mcp.json</code> in your project or <code>~/.cursor/mcp.json</code> globally. Add <code>X-API-Key</code> only for team-plan paid tools.</p>
           <pre>{
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
-      "headers": {
-        "X-API-Key": "gt_live_your_key_here"
-      }
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
     }
   }
 }</pre>

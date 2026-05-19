@@ -6,7 +6,10 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
-- No entries yet.
+- Add a no-key 60-second quickstart centered on the first `check_endpoint` tool call.
+- Add example first-call input/output, troubleshooting, and marketplace profile copy snippets.
+- Update README, API guide, landing-page, package, Smithery, MCP registry, and server-card copy to make first-call activation clearer.
+- Add `GTM_PRODUCT_AUDIT.md` with `first_successful_tool_call` as the core activation event.
 
 ## [0.4.5] - 2026-05-15
 

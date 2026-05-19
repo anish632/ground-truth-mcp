@@ -1,6 +1,6 @@
 # Ground Truth
 
-**Live fact-checking tools for AI agents.**
+**Live fact-checking tools for AI agents. Start with one free tool call.**
 
 Ground Truth gives AI agents read-only verification tools for live public data: free endpoint reachability checks, free security-header inspection, pricing-page scans, pricing-page comparisons, evidence-backed claim checks, package-market sizing, compliance scans, named package comparisons, and multi-step hypothesis tests.
 
@@ -18,18 +18,78 @@ You can use Ground Truth three ways:
 
 ---
 
+## 60-Second Quickstart
+
+The fastest first success is the free `check_endpoint` tool. It does not need signup or an API key.
+
+1. Add Ground Truth to an MCP client that supports remote Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
+    }
+  }
+}
+```
+
+2. Restart or refresh the MCP client so it loads the server.
+3. Paste the prompt below.
+
 ## Try This First
 
-These two tools work without signup or an API key:
+Copy-paste this as your first prompt:
+
+> Use Ground Truth to call the `check_endpoint` tool with `url` set to `https://api.github.com`. Return the URL, HTTP status, whether it was accessible, and response time.
+
+Expected output shape:
+
+```json
+{
+  "url": "https://api.github.com/",
+  "accessible": true,
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "responseTimeMs": 120
+}
+```
+
+`responseTimeMs` will vary. A first successful tool call means your MCP client is connected and Ground Truth is usable.
+
+## Free First Tools
+
+These tools work without signup or an API key:
 
 - `check_endpoint`: verify that a public URL or API endpoint responds.
 - `inspect_security_headers`: inspect HSTS, CSP, frame protections, and related browser-facing security headers.
 
-Example prompts:
+If the agent answers from memory instead of calling a tool, ask it to call the tool by name.
 
-- "Use Ground Truth to check whether https://api.github.com responds."
-- "Use Ground Truth to inspect security headers for https://example.com."
-- "Before recommending this API, use Ground Truth to verify the endpoint is reachable."
+---
+
+## Health Check
+
+Check that the hosted server card is reachable:
+
+```bash
+curl -I https://ground-truth-mcp.anishdasmail.workers.dev/.well-known/mcp/server-card.json
+```
+
+Smoke-test the free tool over MCP HTTP:
+
+```bash
+SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ground-truth-quickstart","version":"1.0.0"}},"id":0}' | tr -d '\r' | awk '/^mcp-session-id:/ {print $2}')"
+
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://api.github.com"}},"id":1}'
+```
 
 ---
 
@@ -47,6 +107,40 @@ Ground Truth helps agents check facts before they answer, recommend, or act.
 | **API endpoints** | Confirms a URL exists and responds | "Does this endpoint return 200?" |
 
 All results come from live data and are cached for 5 minutes for faster repeat checks.
+
+---
+
+## Concrete Use Case: Grounded Source Lookup
+
+Use Ground Truth when an agent needs to verify that a source or endpoint exists before it uses that source in an answer, support reply, or research note.
+
+Example input:
+
+```json
+{
+  "name": "check_endpoint",
+  "arguments": {
+    "url": "https://api.github.com"
+  }
+}
+```
+
+Example output shape:
+
+```json
+{
+  "url": "https://api.github.com/",
+  "accessible": true,
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "responseTimeMs": 120,
+  "authRequired": false,
+  "rateLimited": false,
+  "sampleResponse": "{\"current_user_url\":\"https://api.github.com/user\"..."
+}
+```
+
+This gives the agent source-backed context that the URL was reachable at call time and enough response detail to decide whether to use the source, retry, or ask for a different URL.
 
 ---
 
@@ -170,7 +264,7 @@ Team subscription uses API-key billing with predictable monthly usage.
 
 Direct HTTP calls to `/mcp` are session-based. Initialize once, keep the returned `mcp-session-id`, then call tools with that header.
 
-The examples below use the team plan with `X-API-Key`. For agentic pay-per-use, use an x402-capable MCP client or put an xpay proxy in front of this server.
+This example calls the free `check_endpoint` tool with no API key.
 
 ```bash
 SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
@@ -194,14 +288,13 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -H "X-API-Key: $GROUND_TRUTH_API_KEY" \
   -d '{
     "jsonrpc": "2.0",
     "method": "tools/call",
     "params": {
-      "name": "check_pricing",
+      "name": "check_endpoint",
       "arguments": {
-        "url": "https://stripe.com/pricing"
+        "url": "https://api.github.com"
       }
     },
     "id": 1
@@ -244,16 +337,14 @@ const response = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/
     "Accept": "application/json, text/event-stream",
     "Content-Type": "application/json",
     "Mcp-Session-Id": sessionId,
-    "X-API-Key": process.env.GROUND_TRUTH_API_KEY,
   },
   body: JSON.stringify({
     jsonrpc: "2.0",
     method: "tools/call",
     params: {
-      name: "compare_competitors",
+      name: "check_endpoint",
       arguments: {
-        packages: ["react", "vue"],
-        registry: "npm",
+        url: "https://api.github.com",
       },
     },
     id: 1,
@@ -262,26 +353,6 @@ const response = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/
 
 const result = await response.json();
 console.log(result);
-```
-
-### Free endpoint check
-
-```bash
-curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Content-Type: application/json" \
-  -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "check_endpoint",
-      "arguments": {
-        "url": "https://api.github.com"
-      }
-    },
-    "id": 1
-  }'
 ```
 
 Lightweight request checks for free access, team-plan billing, invalid keys, inactive billing, quota enforcement, and active paid access live in [test-usage-enforcement.sh](./test-usage-enforcement.sh).
@@ -298,16 +369,13 @@ If you want agentic pay-per-use without changing your app code, register this MC
 
 ### Claude Desktop
 
-Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+For the free first call, add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "ground-truth": {
-      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp",
-      "headers": {
-        "X-API-Key": "gt_live_your_key_here"
-      }
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
     }
   }
 }
@@ -315,7 +383,21 @@ Add this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ### Cursor
 
-Add this to `.cursor/mcp.json` in your project or `~/.cursor/mcp.json` globally:
+For the free first call, add this to `.cursor/mcp.json` in your project or `~/.cursor/mcp.json` globally:
+
+```json
+{
+  "mcpServers": {
+    "ground-truth": {
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev/mcp"
+    }
+  }
+}
+```
+
+### Optional Team API Key
+
+Only add `X-API-Key` when you are using paid tools through the team plan:
 
 ```json
 {
@@ -384,6 +466,38 @@ Full reference: [API_USAGE.md](./API_USAGE.md)
 
 ---
 
+## Troubleshooting
+
+### Server not connecting
+
+- Confirm your MCP client supports remote Streamable HTTP servers.
+- Confirm the URL is exactly `https://ground-truth-mcp.anishdasmail.workers.dev/mcp`.
+- Restart or refresh the MCP client after editing its config.
+- Run the server-card health check: `curl -I https://ground-truth-mcp.anishdasmail.workers.dev/.well-known/mcp/server-card.json`.
+
+### No tool calls appearing
+
+- Use the copy-paste prompt above and name the tool: `check_endpoint`.
+- Make sure the client has Ground Truth enabled in its tool list.
+- Start with a free tool. Do not add `X-API-Key` unless you are testing paid team access.
+- If the model answers from memory, ask it to call `check_endpoint` explicitly.
+
+### Missing environment variables
+
+- Hosted free checks do not need environment variables or an API key.
+- Local deployments need the `API_KEYS` KV binding for quota tracking.
+- Team billing needs `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`.
+- x402 pay-per-use can use defaults for testnet, but production payments should set `GROUND_TRUTH_X402_NETWORK` and `GROUND_TRUTH_X402_RECIPIENT`.
+
+### Unsupported MCP client
+
+- Use the direct MCP HTTP curl example above to confirm the server works.
+- Use a client with remote Streamable HTTP support for the hosted server.
+- If a directory requires stdio, use the included Glama bridge command: `npm run start:glama:stdio`.
+- For agentic paid tools in clients without native x402 support, put an xpay proxy in front of the live `/mcp` URL.
+
+---
+
 ## Architecture
 
 Ground Truth keeps the current Cloudflare Workers architecture:
@@ -406,6 +520,22 @@ Ground Truth is set up for multiple discovery and monetization paths:
 - xpay MCP monetization. You can register the live `/mcp` URL with xpay to get a managed pay-per-tool proxy without changing the server code.
 - MCP Market directory listing for additional discovery.
 - Apify is optional if you want a separate marketplace-native Actor version later; the current project stays optimized for remote MCP delivery rather than an Actor-first runtime.
+
+### Marketplace Profile Copy
+
+Use these snippets when updating Glama, Smithery, MCP Market, or xpay profile fields.
+
+Short description:
+
+> Give AI agents one free first check: call `check_endpoint` to verify a public URL responds, then use paid tools for pricing, compliance, claims, package-market, and competitor checks.
+
+Try-first prompt:
+
+> Use Ground Truth to call `check_endpoint` with `url` set to `https://api.github.com`. Return the URL, status, accessible boolean, and response time.
+
+Setup note:
+
+> No API key is required for `check_endpoint` or `inspect_security_headers`. Add `X-API-Key` only for team-plan paid tools, or use x402/xpay for pay-per-use paid calls.
 
 ---
 
@@ -478,4 +608,4 @@ MIT — see [LICENSE](./LICENSE)
 
 **Made by [Anish Das](https://github.com/anish632)**
 
-_Last updated: April 29, 2026_
+_Last updated: May 19, 2026_
