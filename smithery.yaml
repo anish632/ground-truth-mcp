@@ -1,3 +1,4 @@
+serverUuid: 474f2134-6323-4f1d-b41d-218e14476258
 startCommand:
   type: http
   configSchema:

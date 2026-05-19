@@ -252,6 +252,7 @@ Example:
 
 ### xpay
 
+- xpay API key (public): `xpay_pk_vMuXB-Wm8HRywQQc1KdurlfxhGWHoMDu`
 - Register the production `/mcp` URL with xpay if you want a managed pay-per-tool proxy
 - Use the production MCP URL: `https://ground-truth-mcp.anishdasmail.workers.dev/mcp`
 - Recommended provider slug: `ground-truth`

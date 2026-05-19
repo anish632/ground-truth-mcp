@@ -5,7 +5,8 @@
 	"compatibility_date": "2026-01-01",
 	"compatibility_flags": ["nodejs_compat"],
 	"vars": {
-		"GROUND_TRUTH_DEPLOYMENT_MODE": "xpay_upstream"
+		"GROUND_TRUTH_DEPLOYMENT_MODE": "xpay_upstream",
+		"XPAY_API_KEY": "xpay_pk_vMuXB-Wm8HRywQQc1KdurlfxhGWHoMDu"
 	},
 	"durable_objects": {
 		"bindings": [
