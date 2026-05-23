@@ -41,16 +41,16 @@ The fastest first success is the free `check_endpoint` tool. It does not need si
 
 Copy-paste this as your first prompt:
 
-> Use Ground Truth to call the `check_endpoint` tool with `url` set to `https://api.github.com`. Return the URL, HTTP status, whether it was accessible, and response time.
+> Use Ground Truth to call the `check_endpoint` tool with `url` set to `https://example.com`. Return the URL, HTTP status, whether it was accessible, and response time.
 
 Expected output shape:
 
 ```json
 {
-  "url": "https://api.github.com/",
+  "url": "https://example.com/",
   "accessible": true,
   "status": 200,
-  "contentType": "application/json; charset=utf-8",
+  "contentType": "text/html",
   "responseTimeMs": 120
 }
 ```
@@ -88,7 +88,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://api.github.com"}},"id":1}'
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://example.com"}},"id":1}'
 ```
 
 ---
@@ -120,7 +120,7 @@ Example input:
 {
   "name": "check_endpoint",
   "arguments": {
-    "url": "https://api.github.com"
+    "url": "https://example.com"
   }
 }
 ```
@@ -129,14 +129,14 @@ Example output shape:
 
 ```json
 {
-  "url": "https://api.github.com/",
+  "url": "https://example.com/",
   "accessible": true,
   "status": 200,
-  "contentType": "application/json; charset=utf-8",
+  "contentType": "text/html",
   "responseTimeMs": 120,
   "authRequired": false,
   "rateLimited": false,
-  "sampleResponse": "{\"current_user_url\":\"https://api.github.com/user\"..."
+  "sampleResponse": "<!doctype html><html..."
 }
 ```
 
@@ -294,7 +294,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
     "params": {
       "name": "check_endpoint",
       "arguments": {
-        "url": "https://api.github.com"
+        "url": "https://example.com"
       }
     },
     "id": 1
@@ -344,7 +344,7 @@ const response = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/
     params: {
       name: "check_endpoint",
       arguments: {
-        url: "https://api.github.com",
+        url: "https://example.com",
       },
     },
     id: 1,
@@ -531,7 +531,7 @@ Short description:
 
 Try-first prompt:
 
-> Use Ground Truth to call `check_endpoint` with `url` set to `https://api.github.com`. Return the URL, status, accessible boolean, and response time.
+> Use Ground Truth to call `check_endpoint` with `url` set to `https://example.com`. Return the URL, status, accessible boolean, and response time.
 
 Setup note:
 

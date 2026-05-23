@@ -1552,7 +1552,14 @@ function generateApiKey(): string {
 }
 
 // --- Remote telemetry logger ---
-async function logRemoteUsage(tool: string, success: boolean): Promise<void> {
+type TelemetryMetadata = Record<string, string | number | boolean | null>;
+
+async function logRemoteUsage(
+  tool: string,
+  success: boolean,
+  eventName = "tool_call_completed",
+  metadata: TelemetryMetadata = {},
+): Promise<void> {
   if (!TELEMETRY_ENABLED) return;
   
   try {
@@ -1564,10 +1571,12 @@ async function logRemoteUsage(tool: string, success: boolean): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        event_name: eventName,
         tool_name: tool,
         success,
         server_version: SERVER_VERSION,
         os_platform: platform,
+        metadata,
         timestamp: new Date().toISOString(),
       }),
     }).catch(() => {}); // Silently fail - telemetry should never break the app
@@ -2713,7 +2722,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
                   "Perform one unauthenticated GET request and pass when the endpoint returns a 2xx HTTP status.",
                 ),
                 url: z.string().url().describe(
-                  "Public URL to probe, for example https://api.github.com.",
+                  "Public URL to probe, for example https://example.com.",
                 ),
               }),
               z.object({
@@ -2996,6 +3005,14 @@ export default {
                 },
                 requestId,
               );
+            }
+
+            if (usage.used === 0) {
+              ctx.waitUntil(logRemoteUsage(toolName, true, "first_free_tool_call_allowed", {
+                month,
+                client_type: freeClient.type,
+                quota_limit: FREE_MONTHLY_LIMIT,
+              }));
             }
 
             await incrementUsage(env.API_KEYS, usageKey, "free", subjectId, month, toolName);
@@ -3932,7 +3949,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
         <div class="code-card">
           <h3>2. Paste this first prompt</h3>
           <p>Name the tool so the agent calls it instead of answering from memory.</p>
-          <div class="code-block">Use Ground Truth to call the check_endpoint tool with url set to https://api.github.com. Return the URL, HTTP status, whether it was accessible, and response time.</div>
+          <div class="code-block">Use Ground Truth to call the check_endpoint tool with url set to https://example.com. Return the URL, HTTP status, whether it was accessible, and response time.</div>
         </div>
         <div class="code-card">
           <h3>Example input</h3>
@@ -3940,7 +3957,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           <div class="code-block">{
   "name": "check_endpoint",
   "arguments": {
-    "url": "https://api.github.com"
+    "url": "https://example.com"
   }
 }</div>
         </div>
@@ -3948,10 +3965,10 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           <h3>Example output shape</h3>
           <p>Response time varies by run.</p>
           <div class="code-block">{
-  "url": "https://api.github.com/",
+  "url": "https://example.com/",
   "accessible": true,
   "status": 200,
-  "contentType": "application/json; charset=utf-8",
+  "contentType": "text/html",
   "responseTimeMs": 120
 }</div>
         </div>
@@ -4098,11 +4115,11 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
 
     <section id="api-examples">
       <h2>API examples</h2>
-      <p class="section-intro">Use Ground Truth directly over HTTP if you want verification in a script, backend, or agent loop.</p>
+      <p class="section-intro">Use Ground Truth directly over HTTP if you want the free first check in a script, backend, or agent loop.</p>
       <div class="code-grid">
         <div class="code-card">
           <h3>Direct API <code>curl</code> call</h3>
-          <p>Initialize the MCP session, then verify a pricing claim against a live pricing page.</p>
+          <p>Initialize the MCP session, then call the free endpoint check with no API key.</p>
           <div class="code-block">SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   -H "Accept: application/json, text/event-stream" \\
   -H "Content-Type: application/json" \\
@@ -4112,14 +4129,13 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   -H "Accept: application/json, text/event-stream" \\
   -H "Content-Type: application/json" \\
   -H "Mcp-Session-Id: $SESSION_ID" \\
-  -H "X-API-Key: $GROUND_TRUTH_API_KEY" \\
   -d '{
     "jsonrpc": "2.0",
     "method": "tools/call",
     "params": {
-      "name": "check_pricing",
+      "name": "check_endpoint",
       "arguments": {
-        "url": "https://stripe.com/pricing"
+        "url": "https://example.com"
       }
     },
     "id": 1
@@ -4127,7 +4143,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
         </div>
         <div class="code-card">
           <h3>JavaScript <code>fetch</code> example</h3>
-          <p>Compare package popularity from code.</p>
+          <p>Run the same no-key endpoint check from code.</p>
           <div class="code-block">const initResponse = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/mcp", {
   method: "POST",
   headers: {
@@ -4161,16 +4177,14 @@ const response = await fetch("https://ground-truth-mcp.anishdasmail.workers.dev/
     "Accept": "application/json, text/event-stream",
     "Content-Type": "application/json",
     "Mcp-Session-Id": sessionId,
-    "X-API-Key": process.env.GROUND_TRUTH_API_KEY,
   },
   body: JSON.stringify({
     jsonrpc: "2.0",
     method: "tools/call",
     params: {
-      name: "compare_competitors",
+      name: "check_endpoint",
       arguments: {
-        packages: ["react", "vue"],
-        registry: "npm",
+        url: "https://example.com",
       },
     },
     id: 1,

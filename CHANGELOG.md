@@ -10,6 +10,8 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - Add example first-call input/output, troubleshooting, and marketplace profile copy snippets.
 - Update README, API guide, landing-page, package, Smithery, MCP registry, and server-card copy to make first-call activation clearer.
 - Add `GTM_PRODUCT_AUDIT.md` with `first_successful_tool_call` as the core activation event.
+- Align homepage API examples with the no-key `check_endpoint` first call and emit a first-free-call telemetry event from the quota gateway.
+- Switch the first-call sample URL from GitHub API to `https://example.com` after live verification showed GitHub rate limits can block the first success.
 
 ## [0.4.5] - 2026-05-15
 

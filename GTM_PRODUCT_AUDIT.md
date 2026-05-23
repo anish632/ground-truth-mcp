@@ -30,7 +30,7 @@ Recommended first activation event:
   "event": "first_successful_tool_call",
   "tool": "check_endpoint",
   "arguments": {
-    "url": "https://api.github.com"
+    "url": "https://example.com"
   }
 }
 ```
@@ -76,7 +76,7 @@ Short description:
 
 Try-first prompt:
 
-> Use Ground Truth to call `check_endpoint` with `url` set to `https://api.github.com`. Return the URL, status, accessible boolean, and response time.
+> Use Ground Truth to call `check_endpoint` with `url` set to `https://example.com`. Return the URL, status, accessible boolean, and response time.
 
 Setup note:
 
