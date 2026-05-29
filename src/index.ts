@@ -39,9 +39,9 @@ const XPAY_UPSTREAM_HEADER = "X-Ground-Truth-Xpay-Secret";
 const PUBLIC_APP_ORIGIN = "https://ground-truth-mcp.anishdasmail.workers.dev";
 const SERVER_CARD_ICON_PATH = "/icon.svg";
 const SERVER_CARD_DESCRIPTION =
-  "Start with one free MCP tool call: check whether a public endpoint " +
-  "responds or inspect security headers, then use paid pricing, claim, " +
-  "compliance, market, competitor, and hypothesis checks against public web data.";
+  "First tool call for AI agents: call check_endpoint with url=https://example.com. " +
+  "No signup or API key for the first endpoint check. After that works, use paid " +
+  "pricing, claim, compliance, market, competitor, monitor, and hypothesis checks.";
 const REPUTABLE_CRAWLER_USER_AGENTS = [
   "OAI-SearchBot",
   "GPTBot",
@@ -68,6 +68,7 @@ const AGENTIC_TOOL_PRICES_USD = {
 } as const;
 
 const PAID_TOOLS = Object.keys(AGENTIC_TOOL_PRICES_USD);
+const MONITOR_TOOLS = ["create_monitor", "list_monitors", "run_monitor_now", "get_monitor_result", "delete_monitor", "generate_change_report"] as const;
 const DEFAULT_X402_RECIPIENT = "0xB04BD750b67e7b00c95eAC8995eb9F8441309196";
 const DEFAULT_X402_TESTNET_FACILITATOR_URL = "https://x402.org/facilitator";
 const DEFAULT_X402_MAINNET_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402";
@@ -131,9 +132,10 @@ const SERVER_CARD_TOOLS = [
     name: "check_endpoint",
     title: "Endpoint Reachability Check",
     description:
-      "Call this first to verify that a public URL or API endpoint responds. " +
-      "It performs one live, unauthenticated fetch and returns status, content " +
-      "type, timing, likely auth or rate-limit signals, and a short response sample.",
+      "Call this first. Use url=https://example.com to prove the MCP connection works " +
+      "with no signup or API key. It performs one live, unauthenticated fetch and " +
+      "returns status, content type, timing, likely auth or rate-limit signals, and " +
+      "a short response sample.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -947,6 +949,48 @@ interface ProAccessContext {
   usageKey: string;
 }
 
+interface MonitorRecord {
+  id: string;
+  owner_key_hash: string;
+  name: string;
+  target_type: string;
+  target_value: string;
+  instructions: string | null;
+  schedule: string;
+  notification_destination: string | null;
+  last_run_at: number | null;
+  last_run_status: string | null;
+  created_at: number;
+  updated_at: number;
+  active: number;
+}
+
+interface MonitorResultRecord {
+  id: string;
+  monitor_id: string;
+  owner_key_hash: string;
+  run_at: number;
+  status: string;
+  changed: number;
+  old_value: string | null;
+  new_value: string | null;
+  confidence: number | null;
+  evidence: string | null;
+  error_details: string | null;
+  raw_metadata: string | null;
+}
+
+interface MonitorRunOutcome {
+  status: "success" | "error";
+  changed: boolean;
+  oldValue: string | null;
+  newValue: string;
+  confidence: number;
+  evidence: string[];
+  errorDetails: string | null;
+  rawMetadata: Record<string, unknown>;
+}
+
 interface McpToolCallBody {
   id?: number | string | null;
   method?: string;
@@ -1003,7 +1047,7 @@ function getLlmsTxt(url: URL): string {
   const publicOrigin = getPublicOriginForRequest(url);
   return `# Ground Truth
 
-> Live fact-checking tools for AI agents: endpoints, security headers, pricing, claims, compliance, market checks, and competitor verification.
+> First tool call for AI agents: call check_endpoint with url=https://example.com. No signup or API key for the first endpoint check.
 
 Sitemap: ${getSitemapUrl(url)}
 
@@ -1649,6 +1693,163 @@ function paidResultCacheSet(sql: SqlTagFn, key: string, response: Record<string,
   }
 }
 
+// --- Monitor helpers ---
+function generateMonitorId(): string {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let id = "mon_";
+  for (let i = 0; i < 20; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
+function generateResultId(): string {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let id = "res_";
+  for (let i = 0; i < 20; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  return id;
+}
+
+function isDueForRun(monitor: MonitorRecord, now = Date.now()): boolean {
+  if (monitor.schedule === "manual" || monitor.active === 0) return false;
+  if (monitor.last_run_at === null) return true;
+  const intervals: Record<string, number> = {
+    hourly: 60 * 60 * 1000,
+    daily: 24 * 60 * 60 * 1000,
+    weekly: 7 * 24 * 60 * 60 * 1000,
+  };
+  const interval = intervals[monitor.schedule];
+  return typeof interval === "number" && (now - monitor.last_run_at) >= interval;
+}
+
+function detectMonitorChanges(
+  oldValue: string | null,
+  newValue: string,
+): { changed: boolean; confidence: number } {
+  if (!oldValue) return { changed: false, confidence: 1.0 };
+  if (oldValue === newValue) return { changed: false, confidence: 1.0 };
+  try {
+    const oldObj = JSON.parse(oldValue) as Record<string, unknown>;
+    const newObj = JSON.parse(newValue) as Record<string, unknown>;
+    const allKeys = new Set([...Object.keys(oldObj), ...Object.keys(newObj)]);
+    let diffCount = 0;
+    for (const key of allKeys) {
+      if (JSON.stringify(oldObj[key]) !== JSON.stringify(newObj[key])) diffCount++;
+    }
+    return diffCount > 0 ? { changed: true, confidence: 0.95 } : { changed: false, confidence: 1.0 };
+  } catch {
+    return { changed: true, confidence: 0.7 };
+  }
+}
+
+async function runMonitorVerification(
+  sql: SqlTagFn,
+  monitor: MonitorRecord,
+): Promise<MonitorRunOutcome> {
+  const { target_type, target_value, instructions } = monitor;
+  const evidence: string[] = [];
+  try {
+    if (target_type === "url" || target_type === "endpoint") {
+      const start = Date.now();
+      try {
+        const resp = await fetch(target_value, {
+          headers: { "User-Agent": "GroundTruth/0.4" },
+          signal: AbortSignal.timeout(15000),
+        });
+        const newValue = JSON.stringify({
+          status: resp.status,
+          accessible: resp.ok,
+          contentType: resp.headers.get("content-type"),
+        });
+        evidence.push(target_value);
+        const prev = sql<{ new_value: string | null }>`SELECT new_value FROM monitor_results WHERE monitor_id = ${monitor.id} ORDER BY run_at DESC LIMIT 1`;
+        const oldValue = prev[0]?.new_value ?? null;
+        const { changed, confidence } = detectMonitorChanges(oldValue, newValue);
+        return { status: "success", changed, oldValue, newValue, confidence, evidence, errorDetails: null, rawMetadata: { responseTimeMs: Date.now() - start } };
+      } catch (e) {
+        return { status: "error", changed: false, oldValue: null, newValue: "", confidence: 0, evidence: [], errorDetails: e instanceof Error ? e.message : String(e), rawMetadata: { responseTimeMs: Date.now() - start } };
+      }
+    }
+
+    if (target_type === "pricing_page") {
+      const { body, fromCache } = await cachedFetch(sql, target_value);
+      const signals = extractPricingSignals(body);
+      const newValue = JSON.stringify({
+        pricesFound: signals.pricesFound,
+        plansDetected: signals.plansDetected,
+        hasFreeOption: signals.hasFreeOption,
+        hasFreeTrial: signals.hasFreeTrial,
+      });
+      evidence.push(target_value);
+      const prev = sql<{ new_value: string | null }>`SELECT new_value FROM monitor_results WHERE monitor_id = ${monitor.id} ORDER BY run_at DESC LIMIT 1`;
+      const oldValue = prev[0]?.new_value ?? null;
+      const { changed, confidence } = detectMonitorChanges(oldValue, newValue);
+      return { status: "success", changed, oldValue, newValue, confidence, evidence, errorDetails: null, rawMetadata: { fromCache, pageLength: body.length } };
+    }
+
+    if (target_type === "package") {
+      const colonIdx = target_value.indexOf(":");
+      const registry = colonIdx > 0 ? target_value.slice(0, colonIdx) : "npm";
+      const pkg = colonIdx > 0 ? target_value.slice(colonIdx + 1) : target_value;
+      let newValue: string;
+      if (registry === "pypi") {
+        const apiUrl = `https://pypi.org/pypi/${encodeURIComponent(pkg)}/json`;
+        const { body } = await cachedFetch(sql, apiUrl);
+        const data = JSON.parse(body) as { info?: { version?: string; name?: string } };
+        newValue = JSON.stringify({ version: data.info?.version ?? null, name: data.info?.name ?? pkg });
+        evidence.push(apiUrl);
+      } else {
+        const apiUrl = `https://registry.npmjs.org/${encodeURIComponent(pkg)}/latest`;
+        const { body } = await cachedFetch(sql, apiUrl);
+        const data = JSON.parse(body) as { version?: string; name?: string };
+        newValue = JSON.stringify({ version: data.version ?? null, name: data.name ?? pkg });
+        evidence.push(apiUrl);
+      }
+      const prev = sql<{ new_value: string | null }>`SELECT new_value FROM monitor_results WHERE monitor_id = ${monitor.id} ORDER BY run_at DESC LIMIT 1`;
+      const oldValue = prev[0]?.new_value ?? null;
+      const { changed, confidence } = detectMonitorChanges(oldValue, newValue);
+      return { status: "success", changed, oldValue, newValue, confidence, evidence, errorDetails: null, rawMetadata: { registry, pkg } };
+    }
+
+    if (target_type === "vendor_claim") {
+      const checkUrl = instructions?.trim() ?? "";
+      if (!checkUrl) {
+        return { status: "error", changed: false, oldValue: null, newValue: "", confidence: 0, evidence: [], errorDetails: "vendor_claim requires instructions to contain the evidence URL", rawMetadata: {} };
+      }
+      const { body } = await cachedFetch(sql, checkUrl);
+      const escaped = target_value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const supported = new RegExp(escaped, "i").test(body);
+      const words = target_value.split(/\s+/).filter(w => w.length > 3);
+      const keywordMatches = words.filter(w => body.toLowerCase().includes(w.toLowerCase())).length;
+      const newValue = JSON.stringify({ supported, keywordMatches, claim: target_value.slice(0, 200) });
+      evidence.push(checkUrl);
+      const prev = sql<{ new_value: string | null }>`SELECT new_value FROM monitor_results WHERE monitor_id = ${monitor.id} ORDER BY run_at DESC LIMIT 1`;
+      const oldValue = prev[0]?.new_value ?? null;
+      const { changed, confidence } = detectMonitorChanges(oldValue, newValue);
+      return { status: "success", changed, oldValue, newValue, confidence, evidence, errorDetails: null, rawMetadata: { supported, keywordMatches } };
+    }
+
+    if (target_type === "custom_prompt") {
+      const { body, fromCache } = await cachedFetch(sql, target_value);
+      const keywords = (instructions ?? "").split(",").map(k => k.trim()).filter(Boolean);
+      const matchResults = keywords.map(k => ({ keyword: k, found: body.toLowerCase().includes(k.toLowerCase()) }));
+      const newValue = JSON.stringify({
+        allFound: matchResults.every(m => m.found),
+        anyFound: matchResults.some(m => m.found),
+        matchResults,
+        pageLength: body.length,
+      });
+      evidence.push(target_value);
+      const prev = sql<{ new_value: string | null }>`SELECT new_value FROM monitor_results WHERE monitor_id = ${monitor.id} ORDER BY run_at DESC LIMIT 1`;
+      const oldValue = prev[0]?.new_value ?? null;
+      const { changed, confidence } = detectMonitorChanges(oldValue, newValue);
+      return { status: "success", changed, oldValue, newValue, confidence, evidence, errorDetails: null, rawMetadata: { fromCache, keywords } };
+    }
+
+    return { status: "error", changed: false, oldValue: null, newValue: "", confidence: 0, evidence: [], errorDetails: `Unknown target_type: ${target_type}`, rawMetadata: {} };
+  } catch (e) {
+    return { status: "error", changed: false, oldValue: null, newValue: "", confidence: 0, evidence, errorDetails: e instanceof Error ? e.message : String(e), rawMetadata: {} };
+  }
+}
+
 async function analyzePricingPage(sql: SqlTagFn, url: string) {
   const { body, fromCache } = await cachedFetch(sql, url);
   return {
@@ -1706,6 +1907,9 @@ export class GroundTruthMCP extends McpAgent<Env> {
     this.sql`CREATE TABLE IF NOT EXISTS usage_log (id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT, ts INTEGER, success INTEGER)`;
     // Initialize paid-response cache for idempotent x402 retries
     this.sql`CREATE TABLE IF NOT EXISTS paid_result_cache (key TEXT PRIMARY KEY, response TEXT, ts INTEGER)`;
+    // Initialize monitor tables
+    this.sql`CREATE TABLE IF NOT EXISTS monitors (id TEXT PRIMARY KEY, owner_key_hash TEXT NOT NULL, name TEXT NOT NULL, target_type TEXT NOT NULL, target_value TEXT NOT NULL, instructions TEXT, schedule TEXT NOT NULL DEFAULT 'manual', notification_destination TEXT, last_run_at INTEGER, last_run_status TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1)`;
+    this.sql`CREATE TABLE IF NOT EXISTS monitor_results (id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, owner_key_hash TEXT NOT NULL, run_at INTEGER NOT NULL, status TEXT NOT NULL, changed INTEGER NOT NULL DEFAULT 0, old_value TEXT, new_value TEXT, confidence REAL, evidence TEXT, error_details TEXT, raw_metadata TEXT)`;
     const sql = this.sql.bind(this) as SqlTagFn;
     const logUsage = (tool: string, success: boolean) => {
       try { 
@@ -2872,6 +3076,463 @@ export class GroundTruthMCP extends McpAgent<Env> {
         });
       },
     );
+
+    // ───────────────────────────────────────────────
+    // MONITOR TOOLS (require team API key)
+    // ───────────────────────────────────────────────
+    this.server.registerTool(
+      "create_monitor",
+      {
+        title: "Create Monitor",
+        description:
+          "Create a persistent monitor that tracks a URL, pricing page, package version, " +
+          "endpoint status, vendor claim, or custom keyword pattern over time. " +
+          "Monitors run automatically on their configured schedule (hourly/daily/weekly) " +
+          "via the Cloudflare cron trigger, or on demand with run_monitor_now. " +
+          "Results are stored in the Durable Object SQLite database. Requires a team API key.",
+        inputSchema: {
+          name: z.string().trim().min(1).max(200).describe("Human-readable name for this monitor."),
+          target_type: z.enum(["url", "pricing_page", "package", "endpoint", "vendor_claim", "custom_prompt"]).describe(
+            "What to monitor. url/endpoint: HTTP reachability and status. " +
+            "pricing_page: pricing signals (prices, plans, free tier). " +
+            "package: package version on npm or pypi (target_value as 'npm:pkg-name' or 'pypi:pkg-name'). " +
+            "vendor_claim: keyword presence at a URL (target_value=claim text, instructions=URL to check). " +
+            "custom_prompt: comma-separated keywords checked against a URL (target_value=URL, instructions=keywords).",
+          ),
+          target_value: z.string().trim().min(1).describe(
+            "Primary target. For url/endpoint/pricing_page/custom_prompt: a public https URL. " +
+            "For package: 'npm:package-name' or 'pypi:package-name'. " +
+            "For vendor_claim: the claim text to search for.",
+          ),
+          instructions: z.string().trim().max(1000).optional().describe(
+            "Supplementary instructions. For vendor_claim: the URL to check. " +
+            "For custom_prompt: comma-separated keywords. Optional for other types.",
+          ),
+          schedule: z.enum(["manual", "hourly", "daily", "weekly"]).default("daily").describe(
+            "How often the monitor runs automatically. manual means only via run_monitor_now.",
+          ),
+          notification_destination: z.string().trim().max(500).optional().describe(
+            "Optional destination for change alerts (email or webhook URL). Stored for future use.",
+          ),
+        },
+        outputSchema: {
+          id: z.string().describe("Unique monitor ID."),
+          name: z.string().describe("Monitor name."),
+          target_type: z.string().describe("Monitor target type."),
+          target_value: z.string().describe("Monitor target value."),
+          schedule: z.string().describe("Monitor schedule."),
+          created_at: z.string().describe("Creation timestamp ISO 8601."),
+          error: z.string().optional().describe("Error message if creation failed."),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ name, target_type, target_value, instructions, schedule, notification_destination }, extra) => {
+        const apiKey = getExtraHeader(extra, "X-API-Key");
+        if (!apiKey) {
+          return structuredToolResult({ id: "", name, target_type, target_value, schedule: schedule ?? "daily", created_at: "", error: "missing_api_key: create_monitor requires a team API key" });
+        }
+        const ownerKeyHash = await sha256Hex(apiKey);
+        const id = generateMonitorId();
+        const now = Date.now();
+        const sched = schedule ?? "daily";
+        try {
+          sql`INSERT INTO monitors (id, owner_key_hash, name, target_type, target_value, instructions, schedule, notification_destination, last_run_at, last_run_status, created_at, updated_at, active) VALUES (${id}, ${ownerKeyHash}, ${name}, ${target_type}, ${target_value}, ${instructions ?? null}, ${sched}, ${notification_destination ?? null}, ${null}, ${null}, ${now}, ${now}, ${1})`;
+          logUsage("create_monitor", true);
+          return structuredToolResult({ id, name, target_type, target_value, schedule: sched, created_at: new Date(now).toISOString() });
+        } catch (e) {
+          logUsage("create_monitor", false);
+          return structuredToolResult({ id: "", name, target_type, target_value, schedule: sched, created_at: "", error: e instanceof Error ? e.message : String(e) });
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "list_monitors",
+      {
+        title: "List Monitors",
+        description:
+          "List all monitors owned by this API key, with last run status and schedule. " +
+          "Requires a team API key.",
+        inputSchema: {
+          active_only: z.boolean().default(true).describe(
+            "When true returns only active monitors. Set false to include paused monitors.",
+          ),
+        },
+        outputSchema: {
+          monitors: z.array(z.object({
+            id: z.string(),
+            name: z.string(),
+            target_type: z.string(),
+            target_value: z.string(),
+            schedule: z.string(),
+            last_run_at: z.string().nullable(),
+            last_run_status: z.string().nullable(),
+            created_at: z.string(),
+            active: z.boolean(),
+          })).describe("List of monitors belonging to this API key."),
+          total: z.number().describe("Total number of monitors returned."),
+          error: z.string().optional(),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ active_only }, extra) => {
+        const apiKey = getExtraHeader(extra, "X-API-Key");
+        if (!apiKey) {
+          return structuredToolResult({ monitors: [], total: 0, error: "missing_api_key: list_monitors requires a team API key" });
+        }
+        const ownerKeyHash = await sha256Hex(apiKey);
+        try {
+          const rows = active_only
+            ? sql<MonitorRecord>`SELECT * FROM monitors WHERE owner_key_hash = ${ownerKeyHash} AND active = 1 ORDER BY created_at DESC`
+            : sql<MonitorRecord>`SELECT * FROM monitors WHERE owner_key_hash = ${ownerKeyHash} ORDER BY created_at DESC`;
+          const monitors = rows.map(r => ({
+            id: r.id,
+            name: r.name,
+            target_type: r.target_type,
+            target_value: r.target_value,
+            schedule: r.schedule,
+            last_run_at: r.last_run_at ? new Date(r.last_run_at).toISOString() : null,
+            last_run_status: r.last_run_status,
+            created_at: new Date(r.created_at).toISOString(),
+            active: r.active === 1,
+          }));
+          logUsage("list_monitors", true);
+          return structuredToolResult({ monitors, total: monitors.length });
+        } catch (e) {
+          logUsage("list_monitors", false);
+          return structuredToolResult({ monitors: [], total: 0, error: e instanceof Error ? e.message : String(e) });
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "run_monitor_now",
+      {
+        title: "Run Monitor Now",
+        description:
+          "Immediately run a monitor's verification check outside its normal schedule. " +
+          "Records the result and returns whether the observed value changed since the last run. " +
+          "Counts against your monthly quota. Requires a team API key.",
+        inputSchema: {
+          monitor_id: z.string().trim().min(1).describe("The monitor ID returned by create_monitor."),
+        },
+        outputSchema: {
+          monitor_id: z.string(),
+          result_id: z.string(),
+          status: z.enum(["changed", "unchanged", "error"]),
+          changed: z.boolean(),
+          old_value: z.string().nullable(),
+          new_value: z.string().nullable(),
+          confidence: z.number().nullable(),
+          evidence: z.array(z.string()),
+          run_at: z.string(),
+          error: z.string().optional(),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      },
+      async ({ monitor_id }, extra) => {
+        const apiKey = getExtraHeader(extra, "X-API-Key");
+        if (!apiKey) {
+          return structuredToolResult({ monitor_id, result_id: "", status: "error" as const, changed: false, old_value: null, new_value: null, confidence: null, evidence: [], run_at: new Date().toISOString(), error: "missing_api_key: run_monitor_now requires a team API key" });
+        }
+        const ownerKeyHash = await sha256Hex(apiKey);
+        const monitors = sql<MonitorRecord>`SELECT * FROM monitors WHERE id = ${monitor_id} AND owner_key_hash = ${ownerKeyHash} AND active = 1`;
+        if (monitors.length === 0) {
+          return structuredToolResult({ monitor_id, result_id: "", status: "error" as const, changed: false, old_value: null, new_value: null, confidence: null, evidence: [], run_at: new Date().toISOString(), error: "Monitor not found or not owned by this API key" });
+        }
+        const monitor = monitors[0];
+        const outcome = await runMonitorVerification(sql, monitor);
+        const resultId = generateResultId();
+        const runAt = Date.now();
+        const finalStatus: "changed" | "unchanged" | "error" = outcome.status === "error" ? "error" : outcome.changed ? "changed" : "unchanged";
+        try {
+          sql`INSERT INTO monitor_results (id, monitor_id, owner_key_hash, run_at, status, changed, old_value, new_value, confidence, evidence, error_details, raw_metadata) VALUES (${resultId}, ${monitor_id}, ${ownerKeyHash}, ${runAt}, ${finalStatus}, ${outcome.changed ? 1 : 0}, ${outcome.oldValue ?? null}, ${outcome.newValue || null}, ${outcome.confidence}, ${JSON.stringify(outcome.evidence)}, ${outcome.errorDetails ?? null}, ${JSON.stringify(outcome.rawMetadata)})`;
+          sql`UPDATE monitors SET last_run_at = ${runAt}, last_run_status = ${finalStatus}, updated_at = ${runAt} WHERE id = ${monitor_id}`;
+          logUsage("run_monitor_now", outcome.status !== "error");
+          return structuredToolResult({ monitor_id, result_id: resultId, status: finalStatus, changed: outcome.changed, old_value: outcome.oldValue, new_value: outcome.newValue || null, confidence: outcome.confidence, evidence: outcome.evidence, run_at: new Date(runAt).toISOString() });
+        } catch (e) {
+          logUsage("run_monitor_now", false);
+          return structuredToolResult({ monitor_id, result_id: "", status: "error" as const, changed: false, old_value: null, new_value: null, confidence: null, evidence: [], run_at: new Date(runAt).toISOString(), error: e instanceof Error ? e.message : String(e) });
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "get_monitor_result",
+      {
+        title: "Get Monitor Results",
+        description:
+          "Retrieve the most recent run results for a monitor, including change details, " +
+          "confidence score, evidence URLs, and any error information. Requires a team API key.",
+        inputSchema: {
+          monitor_id: z.string().trim().min(1).describe("The monitor ID to retrieve results for."),
+          limit: z.number().int().min(1).max(50).default(10).describe("Maximum number of results to return, newest first."),
+        },
+        outputSchema: {
+          monitor_id: z.string(),
+          results: z.array(z.object({
+            id: z.string(),
+            status: z.string(),
+            changed: z.boolean(),
+            old_value: z.string().nullable(),
+            new_value: z.string().nullable(),
+            confidence: z.number().nullable(),
+            evidence: z.array(z.string()),
+            error_details: z.string().nullable(),
+            run_at: z.string(),
+          })),
+          total: z.number(),
+          error: z.string().optional(),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ monitor_id, limit }, extra) => {
+        const apiKey = getExtraHeader(extra, "X-API-Key");
+        if (!apiKey) {
+          return structuredToolResult({ monitor_id, results: [], total: 0, error: "missing_api_key: get_monitor_result requires a team API key" });
+        }
+        const ownerKeyHash = await sha256Hex(apiKey);
+        try {
+          const lim = limit ?? 10;
+          const rows = sql<MonitorResultRecord>`SELECT * FROM monitor_results WHERE monitor_id = ${monitor_id} AND owner_key_hash = ${ownerKeyHash} ORDER BY run_at DESC LIMIT ${lim}`;
+          const results = rows.map(r => ({
+            id: r.id,
+            status: r.status,
+            changed: r.changed === 1,
+            old_value: r.old_value,
+            new_value: r.new_value,
+            confidence: r.confidence,
+            evidence: r.evidence ? (JSON.parse(r.evidence) as string[]) : [],
+            error_details: r.error_details,
+            run_at: new Date(r.run_at).toISOString(),
+          }));
+          logUsage("get_monitor_result", true);
+          return structuredToolResult({ monitor_id, results, total: results.length });
+        } catch (e) {
+          logUsage("get_monitor_result", false);
+          return structuredToolResult({ monitor_id, results: [], total: 0, error: e instanceof Error ? e.message : String(e) });
+        }
+      },
+    );
+
+    this.server.registerTool(
+      "delete_monitor",
+      {
+        title: "Delete Monitor",
+        description:
+          "Permanently delete a monitor and all its stored results. " +
+          "This action cannot be undone. Requires a team API key.",
+        inputSchema: {
+          monitor_id: z.string().trim().min(1).describe("The monitor ID to delete."),
+        },
+        outputSchema: {
+          monitor_id: z.string(),
+          deleted: z.boolean(),
+          results_deleted: z.number().describe("Number of result records also deleted."),
+          error: z.string().optional(),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ monitor_id }, extra) => {
+        const apiKey = getExtraHeader(extra, "X-API-Key");
+        if (!apiKey) {
+          return structuredToolResult({ monitor_id, deleted: false, results_deleted: 0, error: "missing_api_key: delete_monitor requires a team API key" });
+        }
+        const ownerKeyHash = await sha256Hex(apiKey);
+        const existing = sql<{ id: string }>`SELECT id FROM monitors WHERE id = ${monitor_id} AND owner_key_hash = ${ownerKeyHash}`;
+        if (existing.length === 0) {
+          return structuredToolResult({ monitor_id, deleted: false, results_deleted: 0, error: "Monitor not found or not owned by this API key" });
+        }
+        const countRows = sql<{ cnt: number }>`SELECT COUNT(*) as cnt FROM monitor_results WHERE monitor_id = ${monitor_id}`;
+        const count = countRows[0]?.cnt ?? 0;
+        sql`DELETE FROM monitor_results WHERE monitor_id = ${monitor_id}`;
+        sql`DELETE FROM monitors WHERE id = ${monitor_id} AND owner_key_hash = ${ownerKeyHash}`;
+        logUsage("delete_monitor", true);
+        return structuredToolResult({ monitor_id, deleted: true, results_deleted: count });
+      },
+    );
+
+    this.server.registerTool(
+      "generate_change_report",
+      {
+        title: "Generate Change Report",
+        description:
+          "Generate a summary report of monitor activity for a time window. " +
+          "Shows monitors run, changes detected, failures, risk levels, and recommended follow-up actions. " +
+          "Requires a team API key.",
+        inputSchema: {
+          period: z.enum(["daily", "weekly"]).default("daily").describe(
+            "Report period. daily covers the past 24 hours, weekly covers the past 7 days.",
+          ),
+          include_unchanged: z.boolean().default(false).describe(
+            "When true also lists monitors with no detected changes.",
+          ),
+        },
+        outputSchema: {
+          period: z.string(),
+          from: z.string(),
+          to: z.string(),
+          summary: z.object({
+            monitors_run: z.number(),
+            changes_detected: z.number(),
+            failed_checks: z.number(),
+            unchanged: z.number(),
+          }),
+          changes: z.array(z.object({
+            monitor_id: z.string(),
+            monitor_name: z.string(),
+            target_type: z.string(),
+            target_value: z.string(),
+            run_at: z.string(),
+            old_value: z.string().nullable(),
+            new_value: z.string().nullable(),
+            confidence: z.number().nullable(),
+            risk_level: z.string(),
+          })),
+          failures: z.array(z.object({
+            monitor_id: z.string(),
+            monitor_name: z.string(),
+            run_at: z.string(),
+            error_details: z.string().nullable(),
+          })),
+          recommended_actions: z.array(z.string()),
+          error: z.string().optional(),
+        },
+        annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async ({ period, include_unchanged }, extra) => {
+        const apiKey = getExtraHeader(extra, "X-API-Key");
+        if (!apiKey) {
+          return structuredToolResult({ period: period ?? "daily", from: "", to: "", summary: { monitors_run: 0, changes_detected: 0, failed_checks: 0, unchanged: 0 }, changes: [], failures: [], recommended_actions: [], error: "missing_api_key: generate_change_report requires a team API key" });
+        }
+        const ownerKeyHash = await sha256Hex(apiKey);
+        const now = Date.now();
+        const windowMs = (period ?? "daily") === "weekly" ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+        const fromTs = now - windowMs;
+        try {
+          type ResultRow = MonitorResultRecord & { monitor_name: string; target_type_m: string; target_value_m: string };
+          const rows = sql<ResultRow>`
+            SELECT mr.id, mr.monitor_id, mr.owner_key_hash, mr.run_at, mr.status, mr.changed,
+                   mr.old_value, mr.new_value, mr.confidence, mr.evidence, mr.error_details, mr.raw_metadata,
+                   m.name as monitor_name, m.target_type as target_type_m, m.target_value as target_value_m
+            FROM monitor_results mr
+            JOIN monitors m ON mr.monitor_id = m.id
+            WHERE mr.owner_key_hash = ${ownerKeyHash} AND mr.run_at >= ${fromTs}
+            ORDER BY mr.run_at DESC
+          `;
+
+          const changes = rows
+            .filter(r => r.changed === 1)
+            .map(r => ({
+              monitor_id: r.monitor_id,
+              monitor_name: r.monitor_name,
+              target_type: r.target_type_m,
+              target_value: r.target_value_m,
+              run_at: new Date(r.run_at).toISOString(),
+              old_value: r.old_value,
+              new_value: r.new_value,
+              confidence: r.confidence,
+              risk_level: r.target_type_m === "pricing_page" || r.target_type_m === "vendor_claim"
+                ? "high"
+                : r.target_type_m === "package" ? "medium" : "low",
+            }));
+
+          const failures = rows
+            .filter(r => r.status === "error")
+            .map(r => ({
+              monitor_id: r.monitor_id,
+              monitor_name: r.monitor_name,
+              run_at: new Date(r.run_at).toISOString(),
+              error_details: r.error_details,
+            }));
+
+          const unchangedCount = rows.filter(r => r.status === "unchanged").length;
+          const uniqueMonitors = new Set(rows.map(r => r.monitor_id)).size;
+
+          const actions: string[] = [];
+          if (changes.some(c => c.risk_level === "high")) {
+            actions.push("Review high-risk pricing and claim changes before communicating to stakeholders.");
+          }
+          if (changes.some(c => c.target_type === "package")) {
+            actions.push("A monitored package version changed — review changelog and update dependencies.");
+          }
+          if (changes.some(c => c.target_type === "endpoint" || c.target_type === "url")) {
+            actions.push("An endpoint status changed — verify the service is operating correctly.");
+          }
+          if (failures.length > 0) {
+            actions.push(`${failures.length} monitor check(s) failed — verify the target URLs are still reachable.`);
+          }
+          if (actions.length === 0) {
+            actions.push("No changes or failures detected. All monitored targets appear stable.");
+          }
+
+          void include_unchanged;
+          logUsage("generate_change_report", true);
+          return structuredToolResult({
+            period: period ?? "daily",
+            from: new Date(fromTs).toISOString(),
+            to: new Date(now).toISOString(),
+            summary: { monitors_run: uniqueMonitors, changes_detected: changes.length, failed_checks: failures.length, unchanged: unchangedCount },
+            changes,
+            failures,
+            recommended_actions: actions,
+          });
+        } catch (e) {
+          logUsage("generate_change_report", false);
+          return structuredToolResult({ period: period ?? "daily", from: new Date(fromTs).toISOString(), to: new Date(now).toISOString(), summary: { monitors_run: 0, changes_detected: 0, failed_checks: 0, unchanged: 0 }, changes: [], failures: [], recommended_actions: [], error: e instanceof Error ? e.message : String(e) });
+        }
+      },
+    );
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.hostname === "internal" && url.pathname === "/run-due-monitors" && request.method === "POST") {
+      return this.handleRunDueMonitors();
+    }
+    return super.fetch(request);
+  }
+
+  async handleRunDueMonitors(): Promise<Response> {
+    const sql = this.sql.bind(this) as SqlTagFn;
+    try {
+      this.sql`CREATE TABLE IF NOT EXISTS monitors (id TEXT PRIMARY KEY, owner_key_hash TEXT NOT NULL, name TEXT NOT NULL, target_type TEXT NOT NULL, target_value TEXT NOT NULL, instructions TEXT, schedule TEXT NOT NULL DEFAULT 'manual', notification_destination TEXT, last_run_at INTEGER, last_run_status TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1)`;
+      this.sql`CREATE TABLE IF NOT EXISTS monitor_results (id TEXT PRIMARY KEY, monitor_id TEXT NOT NULL, owner_key_hash TEXT NOT NULL, run_at INTEGER NOT NULL, status TEXT NOT NULL, changed INTEGER NOT NULL DEFAULT 0, old_value TEXT, new_value TEXT, confidence REAL, evidence TEXT, error_details TEXT, raw_metadata TEXT)`;
+
+      const now = Date.now();
+      const all = sql<MonitorRecord>`SELECT * FROM monitors WHERE active = 1 AND schedule != 'manual'`;
+      const due = all.filter(m => isDueForRun(m, now));
+
+      let ran = 0;
+      let changed = 0;
+      let errors = 0;
+
+      for (const monitor of due) {
+        try {
+          const outcome = await runMonitorVerification(sql, monitor);
+          const resultId = generateResultId();
+          const runAt = Date.now();
+          const finalStatus = outcome.status === "error" ? "error" : outcome.changed ? "changed" : "unchanged";
+          sql`INSERT INTO monitor_results (id, monitor_id, owner_key_hash, run_at, status, changed, old_value, new_value, confidence, evidence, error_details, raw_metadata) VALUES (${resultId}, ${monitor.id}, ${monitor.owner_key_hash}, ${runAt}, ${finalStatus}, ${outcome.changed ? 1 : 0}, ${outcome.oldValue ?? null}, ${outcome.newValue || null}, ${outcome.confidence}, ${JSON.stringify(outcome.evidence)}, ${outcome.errorDetails ?? null}, ${JSON.stringify(outcome.rawMetadata)})`;
+          sql`UPDATE monitors SET last_run_at = ${runAt}, last_run_status = ${finalStatus}, updated_at = ${runAt} WHERE id = ${monitor.id}`;
+          ran++;
+          if (outcome.changed) changed++;
+          if (outcome.status === "error") errors++;
+        } catch {
+          errors++;
+        }
+      }
+
+      return new Response(JSON.stringify({ ran, changed, errors, total_due: due.length }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
   }
 }
 
@@ -3017,6 +3678,22 @@ export default {
 
             await incrementUsage(env.API_KEYS, usageKey, "free", subjectId, month, toolName);
           }
+        } else if ((MONITOR_TOOLS as readonly string[]).includes(toolName)) {
+          const maybeApiKey = request.headers.get("X-API-Key")?.trim();
+          if (!maybeApiKey) {
+            return jsonError(
+              401,
+              "missing_api_key",
+              `Tool '${toolName}' requires a team API key.`,
+              { tier: "team", tool: toolName },
+              requestId,
+            );
+          }
+          const proAccess = await requireProAccess(env.API_KEYS, request, toolName, requestId);
+          if (proAccess instanceof Response) {
+            return proAccess;
+          }
+          await incrementUsage(env.API_KEYS, proAccess.usageKey, "pro", proAccess.subjectId, proAccess.month, toolName);
         } else {
           const maybeApiKey = request.headers.get("X-API-Key")?.trim();
           if (maybeApiKey) {
@@ -3128,8 +3805,8 @@ export default {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ground Truth — Pricing</title>
-  <meta name="description" content="Live fact-checking tools for AI agents with free endpoint and security-header checks, agentic pay-per-use, and a team subscription for higher-volume verification.">
+  <title>Ground Truth - Pricing</title>
+  <meta name="description" content="Start with check_endpoint and url=https://example.com. No signup or API key for the first endpoint check; paid tools are available after activation.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -3647,6 +4324,131 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     }
 
     // ───────────────────────────────────────────────
+    // Browser playground: run a real tool from the landing page
+    // with no install, no MCP client, and no API key. Lets a cold
+    // visitor reach a successful tool result before deciding to
+    // connect the MCP server. Includes a free taste of the paid
+    // check_pricing tool. IP rate-limited; does not touch billing.
+    // ───────────────────────────────────────────────
+    if (url.pathname === "/api/try" && request.method === "POST") {
+      const PLAYGROUND_DAILY_LIMIT = 25;
+      try {
+        const payload = (await request.json().catch(() => null)) as
+          | { tool?: unknown; url?: unknown }
+          | null;
+        const tool = typeof payload?.tool === "string" ? payload.tool : "";
+        const rawUrl = typeof payload?.url === "string" ? payload.url : "";
+
+        if (tool !== "check_endpoint" && tool !== "check_pricing") {
+          return jsonResponse(
+            { error: "invalid_tool", message: "tool must be 'check_endpoint' or 'check_pricing'." },
+            { status: 400 },
+          );
+        }
+
+        const normalizedUrl = normalizeHttpUrlInput(rawUrl);
+        if (!normalizedUrl) {
+          return jsonResponse(
+            { error: "invalid_url", message: "Provide a public http(s) URL or a bare domain like stripe.com." },
+            { status: 400 },
+          );
+        }
+
+        // Per-IP daily rate limit so the free playground cannot be abused.
+        const client = getAnonymousClientSource(request);
+        const day = new Date().toISOString().slice(0, 10);
+        const clientHash = await sha256Hex(`${client.type}:${client.value}`);
+        const limitKey = `playground:${day}:${clientHash}`;
+        const used = Number((await env.API_KEYS.get(limitKey)) ?? "0") || 0;
+        if (used >= PLAYGROUND_DAILY_LIMIT) {
+          return jsonResponse(
+            {
+              error: "playground_limit",
+              message:
+                "Daily playground limit reached. Connect the MCP server to keep going — the free check_endpoint and inspect_security_headers tools have no per-call cost.",
+              limit: PLAYGROUND_DAILY_LIMIT,
+            },
+            { status: 429 },
+          );
+        }
+        // 48h TTL so the daily key self-expires.
+        ctx.waitUntil(env.API_KEYS.put(limitKey, String(used + 1), { expirationTtl: 172800 }));
+
+        if (used === 0) {
+          ctx.waitUntil(
+            logRemoteUsage(`playground_${tool}`, true, "playground_first_call", {
+              client_type: client.type,
+            }),
+          );
+        }
+
+        const start = Date.now();
+        if (tool === "check_endpoint") {
+          try {
+            const resp = await fetch(normalizedUrl, { headers: { "User-Agent": "GroundTruth/0.4" } });
+            const sample = (await resp.text()).slice(0, 600);
+            return jsonResponse({
+              tool: "check_endpoint",
+              tier: "free",
+              ...(normalizedUrl !== rawUrl ? { inputUrl: rawUrl } : {}),
+              url: normalizedUrl,
+              accessible: resp.ok,
+              status: resp.status,
+              contentType: resp.headers.get("content-type"),
+              responseTimeMs: Date.now() - start,
+              authRequired: resp.status === 401 || resp.status === 403,
+              rateLimited: resp.status === 429,
+              sampleResponse: sample,
+            });
+          } catch (e) {
+            return jsonResponse({
+              tool: "check_endpoint",
+              tier: "free",
+              url: normalizedUrl,
+              accessible: false,
+              error: e instanceof Error ? e.message : String(e),
+              responseTimeMs: Date.now() - start,
+            });
+          }
+        }
+
+        // tool === "check_pricing": a free, in-browser taste of a paid tool.
+        try {
+          const resp = await fetch(normalizedUrl, { headers: { "User-Agent": "GroundTruth/0.4" } });
+          const body = await resp.text();
+          const signals = extractPricingSignals(body);
+          return jsonResponse({
+            tool: "check_pricing",
+            tier: "paid-preview",
+            note: "Free in-browser preview of a paid tool. Pay-per-call via x402 or a team API key when calling it from an agent.",
+            url: normalizedUrl,
+            status: resp.status,
+            accessible: resp.ok,
+            pricesFound: signals.pricesFound,
+            plansDetected: signals.plansDetected,
+            hasFreeOption: signals.hasFreeOption,
+            hasFreeTrial: signals.hasFreeTrial,
+            responseTimeMs: Date.now() - start,
+          });
+        } catch (e) {
+          return jsonResponse({
+            tool: "check_pricing",
+            tier: "paid-preview",
+            url: normalizedUrl,
+            accessible: false,
+            error: e instanceof Error ? e.message : String(e),
+            responseTimeMs: Date.now() - start,
+          });
+        }
+      } catch (e) {
+        return jsonResponse(
+          { error: "playground_failed", message: e instanceof Error ? e.message : String(e) },
+          { status: 500 },
+        );
+      }
+    }
+
+    // ───────────────────────────────────────────────
     // Root page
     // ───────────────────────────────────────────────
     if (url.pathname === "/") {
@@ -3657,8 +4459,8 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   <meta name="base:app_id" content="69956c02e0d5d2cf831b5fc8" />
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ground Truth — Verification Layer for AI Agents</title>
-  <meta name="description" content="Live fact-checking tools for AI agents with free endpoint and security-header checks, agentic pay-per-use, and a team subscription for pricing, compliance, and competitive verification.">
+  <title>Ground Truth - First Tool Call for AI Agents</title>
+  <meta name="description" content="First tool call for AI agents: call check_endpoint with url=https://example.com. No signup or API key for the first endpoint check.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -3917,22 +4719,22 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
 <body>
   <div class="shell">
     <div class="hero">
-      <div class="eyebrow">Verification Layer For AI Agents</div>
-      <h1>Verify before your agents act.</h1>
-      <p class="sub">Ground Truth gives agents live verification tools for pricing, compliance, security posture, vendor diligence, and market checks. Start with one free endpoint check, then use paid tools through x402, xpay, or a team API key when you need broader verification.</p>
+      <div class="eyebrow">First Tool Call For AI Agents</div>
+      <h1>Check a live endpoint in 60 seconds.</h1>
+      <p class="sub">Ground Truth gives agents a no-key first MCP call. Add the remote server, paste one prompt, and call <code>check_endpoint</code> with <code>url=https://example.com</code> before trying paid verification tools.</p>
       <div class="cta-row">
         <a href="#quickstart" class="btn btn-primary">Try The First Call</a>
         <a href="#mcp-setup" class="btn btn-secondary">See MCP Setup</a>
       </div>
       <div class="hero-meta">
         <span>No API key for first call</span>
-        <span>Live data checks</span>
-        <span>Agentic pay-per-use or team plan</span>
+        <span>One copy-paste prompt</span>
+        <span>Paid tools only after activation</span>
       </div>
     </div>
 
     <section id="quickstart">
-      <h2>60-second quickstart</h2>
+      <h2>Glama quickstart: one copy-paste path</h2>
       <p class="section-intro">Use the free <code>check_endpoint</code> tool first. It verifies that your MCP client is connected and that Ground Truth can return source-backed context from a public URL.</p>
       <div class="code-grid">
         <div class="code-card">
@@ -3949,7 +4751,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
         <div class="code-card">
           <h3>2. Paste this first prompt</h3>
           <p>Name the tool so the agent calls it instead of answering from memory.</p>
-          <div class="code-block">Use Ground Truth to call the check_endpoint tool with url set to https://example.com. Return the URL, HTTP status, whether it was accessible, and response time.</div>
+          <div class="code-block">Use Ground Truth's check_endpoint tool with url set to https://example.com. Do not answer from memory. Call the tool and return exactly: url, accessible, status, contentType, and responseTimeMs.</div>
         </div>
         <div class="code-card">
           <h3>Example input</h3>
@@ -4277,6 +5079,30 @@ console.log(result);</div>
       }
     }
 
+    // ───────────────────────────────────────────────
+    // Internal: trigger scheduled monitor run
+    // ───────────────────────────────────────────────
+    if (url.pathname === "/internal/run-due-monitors" && request.method === "POST") {
+      try {
+        const id = env.MCP_OBJECT.idFromName("ground-truth");
+        const stub = env.MCP_OBJECT.get(id);
+        return stub.fetch(new Request("https://internal/run-due-monitors", { method: "POST" }));
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
     return new Response("Not found", { status: 404 });
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const id = env.MCP_OBJECT.idFromName("ground-truth");
+    const stub = env.MCP_OBJECT.get(id);
+    ctx.waitUntil(
+      stub.fetch(new Request("https://internal/run-due-monitors", { method: "POST" })).catch(() => {}),
+    );
   },
 };

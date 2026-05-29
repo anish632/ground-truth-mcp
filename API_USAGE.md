@@ -1,20 +1,14 @@
 # Ground Truth API Guide
 
-**Live fact-checking tools for AI agents. Start with one free tool call.**
+**First tool call for AI agents: check a live endpoint in 60 seconds. No signup. No API key.**
 
 Ground Truth gives AI agents a verification layer they can call before answering, recommending, or taking action.
 
-Ground Truth supports three access modes:
-
-- Free endpoint and security-header checks
-- Agentic pay-per-use with x402-compatible clients or an xpay proxy
-- Team API-key billing with a monthly subscription
-
-This guide covers what Ground Truth verifies, how the access modes differ, direct API examples, MCP setup, and every available tool.
+Start with exactly one free MCP tool call: `check_endpoint` with `url=https://example.com`. After that works, use the rest of this guide for access modes, direct API examples, and paid tools.
 
 ---
 
-## 60-Second Quickstart
+## 60-Second Quickstart: One Copy-Paste Path
 
 The fastest first success is the free `check_endpoint` tool. It does not need signup or an API key.
 
@@ -33,7 +27,7 @@ The fastest first success is the free `check_endpoint` tool. It does not need si
 2. Restart or refresh the MCP client so it loads the server.
 3. Paste this prompt:
 
-> Use Ground Truth to call the `check_endpoint` tool with `url` set to `https://example.com`. Return the URL, HTTP status, whether it was accessible, and response time.
+> Use Ground Truth's `check_endpoint` tool with `url` set to `https://example.com`. Do not answer from memory. Call the tool and return exactly: `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
 
 Expected output shape:
 
@@ -105,14 +99,11 @@ To use the team plan, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pr
 
 ## Try This First
 
-These two calls work without signup or an API key:
-
-- `check_endpoint` for "Does this URL respond right now?"
-- `inspect_security_headers` for "What security headers does this public site expose?"
+This call works without signup or an API key:
 
 Copy-paste this first prompt:
 
-> Use Ground Truth to call the `check_endpoint` tool with `url` set to `https://example.com`. Return the URL, HTTP status, whether it was accessible, and response time.
+> Use Ground Truth's `check_endpoint` tool with `url` set to `https://example.com`. Do not answer from memory. Call the tool and return exactly: `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
 
 ---
 

@@ -4,11 +4,11 @@ Date: 2026-05-19
 
 ## Activation Problem
 
-Known 30-day signal:
+Known 30-day signal from latest Glama screenshot:
 
-- 1,111 search impressions
+- 1,179 search impressions
 - 11 search clicks
-- 932 profile views
+- 1,075 profile views
 - 0 tool calls
 
 Interpretation: discovery and profile views exist, but users are not reaching the first successful MCP tool call.
@@ -72,24 +72,30 @@ Recommended first activation event:
 
 Short description:
 
-> Give AI agents one free first check: call `check_endpoint` to verify a public URL responds, then use paid tools for pricing, compliance, claims, package-market, and competitor checks.
+> First tool call for AI agents: call `check_endpoint` with `url=https://example.com` to verify Ground Truth is connected. No signup or API key for the first endpoint check.
 
 Try-first prompt:
 
-> Use Ground Truth to call `check_endpoint` with `url` set to `https://example.com`. Return the URL, status, accessible boolean, and response time.
+> Use Ground Truth's `check_endpoint` tool with `url` set to `https://example.com`. Do not answer from memory. Call the tool and return exactly: `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
 
 Setup note:
 
-> No API key is required for `check_endpoint` or `inspect_security_headers`. Add `X-API-Key` only for team-plan paid tools, or use x402/xpay for pay-per-use paid calls.
+> No API key is required for the first `check_endpoint` call. Add `X-API-Key` only after that works and only for team-plan paid tools.
 
 Release notes:
 
 > Improved first-call activation with a no-key 60-second quickstart, one copy-paste `check_endpoint` prompt, example input/output, clearer free-vs-paid setup, and troubleshooting for MCP client connection issues.
 
-## Next Measurement
+## Current Activation Rewrite
+
+The profile and quickstart now lead with one path only:
+
+1. Add the remote MCP URL.
+2. Paste the exact `check_endpoint` prompt with `url=https://example.com`.
+3. Verify a structured result containing `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
 
 Track the ratio:
 
-`profile views -> first_successful_tool_call`
+`profile views -> first successful check_endpoint call`
 
 The immediate goal is not more profile views. The goal is that a cold user can reach `check_endpoint` successfully in under 60 seconds.

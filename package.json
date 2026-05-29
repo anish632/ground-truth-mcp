@@ -2,7 +2,7 @@
 	"name": "ground-truth-mcp",
 	"version": "0.4.5",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "Start with one free MCP tool call: verify endpoints, then check pricing, claims, compliance, markets, and competitors.",
+	"description": "First tool call for AI agents: call check_endpoint with url=https://example.com. No signup or API key for the first endpoint check.",
 	"keywords": [
 		"mcp",
 		"mcp-server",

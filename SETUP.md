@@ -111,7 +111,7 @@ curl -X POST http://localhost:8787/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $MCP_SESSION_ID" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://api.github.com"}},"id":1}'
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://example.com"}},"id":1}'
 ```
 
 The activation event is a successful `check_endpoint` result with `accessible`, `status`, and `responseTimeMs` in the returned structured content.
@@ -292,17 +292,17 @@ Example:
 - Point Smithery to `https://ground-truth-mcp.anishdasmail.workers.dev/mcp`
 - The `/.well-known/mcp/server-card.json` route is available as metadata fallback
 - If Smithery's scan is blocked by Cloudflare bot protection, allow `SmitheryBot/1.0` or rely on the static server card
-- Use this first-call profile note: `No API key is required for check_endpoint or inspect_security_headers. Start by calling check_endpoint with url=https://api.github.com.`
+- Use this first-call profile note: `No API key is required for the first check_endpoint call. Start by calling check_endpoint with url=https://example.com.`
 
 ### Profile copy snippets
 
 Short description:
 
-> Give AI agents one free first check: call `check_endpoint` to verify a public URL responds, then use paid tools for pricing, compliance, claims, package-market, and competitor checks.
+> First tool call for AI agents: call `check_endpoint` with `url=https://example.com` to verify Ground Truth is connected. No signup or API key for the first endpoint check.
 
 Quickstart:
 
-> Use Ground Truth to call `check_endpoint` with `url` set to `https://api.github.com`. Return the URL, status, accessible boolean, and response time.
+> Use Ground Truth's `check_endpoint` tool with `url` set to `https://example.com`. Do not answer from memory. Call the tool and return exactly: `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
 
 Release note:
 

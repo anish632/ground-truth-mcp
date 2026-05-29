@@ -1,14 +1,10 @@
 # Ground Truth
 
-**Live fact-checking tools for AI agents. Start with one free tool call.**
+**First tool call for AI agents: check a live endpoint in 60 seconds. No signup. No API key.**
 
-Ground Truth gives AI agents read-only verification tools for live public data: free endpoint reachability checks, free security-header inspection, pricing-page scans, pricing-page comparisons, evidence-backed claim checks, package-market sizing, compliance scans, named package comparisons, and multi-step hypothesis tests.
+Ground Truth gives AI agents read-only verification against live public data. The first action is one free tool call: `check_endpoint` with `url=https://example.com`.
 
-You can use Ground Truth three ways:
-
-- Free endpoint and security-header checks for lightweight verification
-- Agentic pay-per-use with x402-compatible clients or an xpay proxy
-- A team subscription with `X-API-Key` billing and predictable monthly usage
+Do not start with pricing, compliance, claims, package-market, competitor, monitor, API-key, or payment examples. First prove the MCP connection works by calling `check_endpoint`.
 
 [![MCP](https://img.shields.io/badge/MCP-1.11.0-blue)](https://modelcontextprotocol.io)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
@@ -18,11 +14,11 @@ You can use Ground Truth three ways:
 
 ---
 
-## 60-Second Quickstart
+## Glama Quickstart: One Copy-Paste Path
 
-The fastest first success is the free `check_endpoint` tool. It does not need signup or an API key.
+Use this exact path from Glama or any MCP client that supports remote Streamable HTTP.
 
-1. Add Ground Truth to an MCP client that supports remote Streamable HTTP:
+### 1. Add the remote server
 
 ```json
 {
@@ -34,16 +30,13 @@ The fastest first success is the free `check_endpoint` tool. It does not need si
 }
 ```
 
-2. Restart or refresh the MCP client so it loads the server.
-3. Paste the prompt below.
+No `X-API-Key` is needed for this first call.
 
-## Try This First
+### 2. Paste this prompt
 
-Copy-paste this as your first prompt:
+> Use Ground Truth's `check_endpoint` tool with `url` set to `https://example.com`. Do not answer from memory. Call the tool and return exactly: `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
 
-> Use Ground Truth to call the `check_endpoint` tool with `url` set to `https://example.com`. Return the URL, HTTP status, whether it was accessible, and response time.
-
-Expected output shape:
+### 3. Confirm the tool result
 
 ```json
 {
@@ -55,16 +48,46 @@ Expected output shape:
 }
 ```
 
-`responseTimeMs` will vary. A first successful tool call means your MCP client is connected and Ground Truth is usable.
+`responseTimeMs` will vary. Seeing this shape means the first Ground Truth MCP tool call worked.
+
+### If the agent answers without a tool call
+
+Reply with:
+
+> Call the MCP tool named `check_endpoint` now. Use `url=https://example.com`.
 
 ## Free First Tools
 
-These tools work without signup or an API key:
+After the first `check_endpoint` call works, these free tools work without signup or an API key:
 
 - `check_endpoint`: verify that a public URL or API endpoint responds.
 - `inspect_security_headers`: inspect HSTS, CSP, frame protections, and related browser-facing security headers.
 
-If the agent answers from memory instead of calling a tool, ask it to call the tool by name.
+## Activation Measurement
+
+Portfolio baseline before this quickstart rewrite (30-day Glama signal): **1,075 profile views -> 0 tool calls**.
+
+| Metric | Definition | Target by 2026-05-27 |
+|---|---|---|
+| Profile views | Glama/Smithery/MCP Market listing views (30d) | Hold or grow only after activation works |
+| First successful tool call | MCP `tools/call` for `check_endpoint` with HTTP 200 and structured result | **>=1% of new profile views** in the 7 days after rewrite ships |
+| Time to first call | Install/connect → first free tool result | **< 60 seconds** for a cold user following this README |
+
+**How to measure**
+
+1. **Server-side:** Durable Object `usage_log` / KV monthly counters for `check_endpoint` and `inspect_security_headers` (production Worker). Compare week-over-week tool-call counts, not impressions alone.
+2. **Optional telemetry:** Set `GROUND_TRUTH_TELEMETRY=true` on the Worker to emit `first_successful_tool_call` events to your analytics endpoint.
+3. **Decision rule:** If profile views continue but free tool calls stay at **0**, keep the marketplace profile focused on only the [Glama Quickstart](#glama-quickstart-one-copy-paste-path) prompt. Do not buy more impressions or lead with paid-tool examples.
+
+**Success event (log or dashboard):**
+
+```json
+{
+  "event": "first_successful_tool_call",
+  "tool": "check_endpoint",
+  "arguments": { "url": "https://example.com" }
+}
+```
 
 ---
 
@@ -93,20 +116,14 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
 
 ---
 
-## What Ground Truth Verifies
+## What Ground Truth Verifies (after the first call)
 
-Ground Truth helps agents check facts before they answer, recommend, or act.
-
-| Verification | What it checks | Example |
+| Verification | Tool | Tier |
 |---|---|---|
-| **Pricing claims** | Pulls live pricing from product pages | "Does Stripe have a free tier?" |
-| **Pricing comparisons** | Compares multiple pricing pages side by side | "Which vendor shows a free trial right now?" |
-| **Compliance posture** | Scans trust pages for enterprise signals | "Does this vendor mention SOC 2, GDPR, and SCIM?" |
-| **Security posture** | Inspects browser-facing security headers | "Does this app expose HSTS and CSP?" |
-| **Competitor existence** | Checks whether real alternatives show up in npm or PyPI | "Are there edge-first Prisma alternatives?" |
-| **API endpoints** | Confirms a URL exists and responds | "Does this endpoint return 200?" |
+| **API endpoints** | `check_endpoint` | Free |
+| **Security posture** | `inspect_security_headers` | Free |
 
-All results come from live data and are cached for 5 minutes for faster repeat checks.
+Paid tools (pricing, compliance, claims, package-market, competitor checks, and monitors) are documented in [Example Workflows](#example-workflows) and [Tool Reference](#tool-reference). Use them only after a successful free first call.
 
 ---
 
@@ -176,6 +193,8 @@ The result is simple: agents that are less confident for the wrong reasons and m
 ---
 
 ## Example Workflows
+
+> **Start with the Glama Quickstart above.** The workflows below use paid tools or secondary free tools. Skip them until `check_endpoint` works in your MCP client.
 
 ### Verify a pricing claim
 > "Notion costs $8 per user per month for teams."
@@ -527,15 +546,15 @@ Use these snippets when updating Glama, Smithery, MCP Market, or xpay profile fi
 
 Short description:
 
-> Give AI agents one free first check: call `check_endpoint` to verify a public URL responds, then use paid tools for pricing, compliance, claims, package-market, and competitor checks.
+> First tool call for AI agents: call `check_endpoint` with `url=https://example.com` to verify Ground Truth is connected. No signup or API key for the first endpoint check.
 
 Try-first prompt:
 
-> Use Ground Truth to call `check_endpoint` with `url` set to `https://example.com`. Return the URL, status, accessible boolean, and response time.
+> Use Ground Truth's `check_endpoint` tool with `url` set to `https://example.com`. Do not answer from memory. Call the tool and return exactly: `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
 
 Setup note:
 
-> No API key is required for `check_endpoint` or `inspect_security_headers`. Add `X-API-Key` only for team-plan paid tools, or use x402/xpay for pay-per-use paid calls.
+> No API key is required for the first `check_endpoint` call. Add `X-API-Key` only after that works and only for team-plan paid tools.
 
 ---
 
@@ -585,6 +604,203 @@ If Glama generates an `mcp-proxy`-based build spec instead of using the reposito
 
 ---
 
+## Scheduled Monitoring
+
+Ground Truth can **continuously monitor** URLs, pricing pages, package versions, endpoint statuses, vendor claims, and custom keyword patterns — and alert you when anything changes.
+
+Monitors are stored in the Durable Object SQLite database, scoped to your team API key. A Cloudflare cron trigger runs hourly and verifies all due monitors automatically.
+
+### Monitor target types
+
+| `target_type` | What it checks | `target_value` format | `instructions` |
+|---|---|---|---|
+| `url` / `endpoint` | HTTP status, accessibility | `https://…` | — |
+| `pricing_page` | Prices found, plans, free tier | `https://…/pricing` | — |
+| `package` | Latest version on npm or PyPI | `npm:pkg-name` or `pypi:pkg-name` | — |
+| `vendor_claim` | Whether claim text appears at a URL | The claim text | The URL to check |
+| `custom_prompt` | Comma-separated keyword presence | `https://…` | `kw1,kw2,kw3` |
+
+### Monitor tool reference
+
+All monitor tools require a **team API key** (`X-API-Key` header). They count against your monthly quota.
+
+---
+
+#### `create_monitor`
+
+Create a new monitor.
+
+```json
+{
+  "name": "Stripe pricing",
+  "target_type": "pricing_page",
+  "target_value": "https://stripe.com/pricing",
+  "schedule": "daily"
+}
+```
+
+| Argument | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Human-readable label |
+| `target_type` | enum | yes | See table above |
+| `target_value` | string | yes | URL or package identifier |
+| `instructions` | string | no | Evidence URL (vendor_claim) or keyword list (custom_prompt) |
+| `schedule` | `manual`/`hourly`/`daily`/`weekly` | no | Default: `daily` |
+| `notification_destination` | string | no | Email or webhook URL (stored, not yet dispatched) |
+
+**Returns:** `{ id, name, target_type, target_value, schedule, created_at }`
+
+---
+
+#### `list_monitors`
+
+List monitors owned by this API key.
+
+```json
+{ "active_only": true }
+```
+
+**Returns:** `{ monitors: [...], total }`
+
+---
+
+#### `run_monitor_now`
+
+Immediately execute a monitor's check outside its normal schedule.
+
+```json
+{ "monitor_id": "mon_abc123" }
+```
+
+**Returns:** `{ monitor_id, result_id, status, changed, old_value, new_value, confidence, evidence, run_at }`
+
+`status` is one of `changed`, `unchanged`, or `error`.
+
+---
+
+#### `get_monitor_result`
+
+Retrieve recent run history for a monitor.
+
+```json
+{ "monitor_id": "mon_abc123", "limit": 10 }
+```
+
+**Returns:** `{ monitor_id, results: [...], total }`
+
+Each result includes `status`, `changed`, `old_value`, `new_value`, `confidence`, `evidence`, and `run_at`.
+
+---
+
+#### `delete_monitor`
+
+Permanently delete a monitor and all its stored results.
+
+```json
+{ "monitor_id": "mon_abc123" }
+```
+
+**Returns:** `{ monitor_id, deleted, results_deleted }`
+
+---
+
+#### `generate_change_report`
+
+Generate a summary of monitor activity for the past day or week.
+
+```json
+{ "period": "daily" }
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `period` | `daily`/`weekly` | Time window — past 24h or 7d |
+| `include_unchanged` | boolean | Also list stable monitors (default false) |
+
+**Returns:**
+
+```json
+{
+  "period": "daily",
+  "from": "2026-05-25T00:00:00.000Z",
+  "to":   "2026-05-26T00:00:00.000Z",
+  "summary": {
+    "monitors_run": 3,
+    "changes_detected": 1,
+    "failed_checks": 0,
+    "unchanged": 2
+  },
+  "changes": [
+    {
+      "monitor_id": "mon_abc123",
+      "monitor_name": "Stripe pricing",
+      "target_type": "pricing_page",
+      "target_value": "https://stripe.com/pricing",
+      "run_at": "2026-05-25T14:00:00.000Z",
+      "old_value": "{\"pricesFound\":[\"$2.9%\"]}",
+      "new_value": "{\"pricesFound\":[\"$2.7%\"]}",
+      "confidence": 0.95,
+      "risk_level": "high"
+    }
+  ],
+  "failures": [],
+  "recommended_actions": [
+    "Review high-risk pricing and claim changes before communicating to stakeholders."
+  ]
+}
+```
+
+---
+
+### Example agent prompts for monitoring
+
+**Create a daily pricing monitor:**
+> Use Ground Truth `create_monitor` with name "Stripe pricing", target_type "pricing_page", target_value "https://stripe.com/pricing", and schedule "daily".
+
+**Run it immediately and check for changes:**
+> Use Ground Truth `run_monitor_now` with the monitor_id from the previous step. Report whether anything changed and what the new prices are.
+
+**Get a weekly change report:**
+> Use Ground Truth `generate_change_report` with period "weekly". Summarize any high-risk changes and the recommended actions.
+
+**Track a package version:**
+> Use Ground Truth `create_monitor` with name "Zod version watch", target_type "package", target_value "npm:zod", and schedule "daily". Then call `run_monitor_now` to record the baseline version.
+
+**Monitor a vendor compliance claim:**
+> Use Ground Truth `create_monitor` with name "Acme SOC2 claim", target_type "vendor_claim", target_value "SOC 2 Type II", instructions "https://acme.example.com/security", and schedule "weekly".
+
+---
+
+### Scheduled execution (cron)
+
+The cron trigger is configured in `wrangler.jsonc` to fire **every hour**. On each tick it queries all active non-manual monitors, finds those past their interval (hourly/daily/weekly), runs the check, and records the result. No extra setup is needed after deployment.
+
+To run due monitors on demand (admin/CI use):
+
+```bash
+# Trigger the scheduled run via the internal DO route
+curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/internal/run-due-monitors
+```
+
+This route is proxied by the Worker to the Durable Object's `handleRunDueMonitors()` method.
+
+### Local development
+
+Run the smoke tests against a local `wrangler dev` instance:
+
+```bash
+# Start the local server
+npm run start
+
+# In another terminal — basic auth tests (no API key needed)
+./test-monitors.sh
+
+# Full test suite with a valid API key
+GROUND_TRUTH_API_KEY=gt_live_your_key ./test-monitors.sh
+```
+
+---
+
 ## Documentation
 
 - [API_USAGE.md](./API_USAGE.md) for API calls and tool arguments
@@ -608,4 +824,4 @@ MIT — see [LICENSE](./LICENSE)
 
 **Made by [Anish Das](https://github.com/anish632)**
 
-_Last updated: May 19, 2026_
+_Last updated: May 26, 2026 - Glama first-call activation rewrite_

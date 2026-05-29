@@ -8,10 +8,8 @@ startCommand:
         type: string
         title: Team API Key
         description: >-
-          Optional X-API-Key for team-plan access to paid verification tools
-          (check_pricing, compare_pricing_pages, assess_compliance_posture,
-          compare_competitors, verify_claim, estimate_market, test_hypothesis).
-          Leave empty for the first free tool call with check_endpoint or
-          inspect_security_headers, or for agentic x402 pay-per-use.
+          Optional X-API-Key for team-plan access to paid verification tools.
+          Leave empty for the first check_endpoint call with url=https://example.com.
+          Add only after the first call works.
         default: ""
     required: []

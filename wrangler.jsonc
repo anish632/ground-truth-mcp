@@ -23,5 +23,8 @@
 			"tag": "v1",
 			"new_sqlite_classes": ["GroundTruthMCP"]
 		}
-	]
+	],
+	"triggers": {
+		"crons": ["0 * * * *"]
+	}
 }
