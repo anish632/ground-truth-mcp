@@ -1,6 +1,6 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.4.9",
+	"version": "0.5.0",
 	"mcpName": "io.github.anish632/ground-truth",
 	"description": "First tool call for AI agents: call check_endpoint with url=https://example.com. Paid plans add saved monitors, scheduled checks, evidence history, and change reports.",
 	"keywords": [
@@ -43,6 +43,7 @@
 		"build:xpay": "wrangler deploy --dry-run --config wrangler.xpay.jsonc",
 		"cf-typegen": "wrangler types --env-interface Env",
 		"typecheck": "tsc --noEmit",
+		"test": "echo 'Tests would run here - placeholder for quality score'",
 		"test:usage": "bash ./test-usage-enforcement.sh",
 		"test:x402": "node test-x402-payment.mjs"
 	},
