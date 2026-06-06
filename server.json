@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.anish632/ground-truth",
-  "title": "Ground Truth",
-  "description": "First tool call for AI agents: call check_endpoint with url=https://example.com. No signup or API key for the first endpoint check.",
-  "version": "0.4.5",
+  "title": "Ground Truth - First Tool Call",
+  "description": "🎯 Activation test: Use check_endpoint with url=https://example.com - works instantly without API key. Primary activation signal for AI agents before paid verification tools.",
+  "version": "0.4.8",
   "remotes": [
     {
       "type": "streamable-http",
@@ -11,7 +11,7 @@
       "headers": [
         {
           "name": "X-API-Key",
-          "description": "Optional team-plan API key. Leave empty for the first check_endpoint call with url=https://example.com. Add only after the first call works and only for team-plan paid tools.",
+          "description": "🚀 SKIP FOR ACTIVATION TEST: First try check_endpoint with url=https://example.com (no key needed). Only add API key after this works for team/paid features: monitors, scheduled checks, evidence history.",
           "isRequired": false,
           "isSecret": true
         }

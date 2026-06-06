@@ -99,3 +99,61 @@ Track the ratio:
 `profile views -> first successful check_endpoint call`
 
 The immediate goal is not more profile views. The goal is that a cold user can reach `check_endpoint` successfully in under 60 seconds.
+
+---
+
+## Revenue Sprint Update (2026-06-02)
+
+### Pivot
+
+Ground Truth should not monetize primarily as one paid tool call. A single `check_pricing` or `verify_claim` call is easy for a browser/search agent to approximate.
+
+Position the paid product as:
+
+> Monitored evidence and change alerts for agent claims.
+
+The free product proves the MCP connection. The paid product preserves and repeats verification over time.
+
+### Paid Value
+
+Charge for durable infrastructure:
+
+- Saved monitors
+- Scheduled runs
+- Before/after diff history
+- Change reports
+- Team API keys
+- Higher quotas
+- Future: Slack/email/webhook alerts and audit-log export
+
+### Offer Tests
+
+| Offer | Price | Implementation status | Why |
+|---|---:|---|---|
+| First endpoint/security checks | $0 | Implemented | Reduces activation friction |
+| Agentic per-call tools | From $0.01/call | Implemented | Useful, but likely weak as primary revenue |
+| Monitor Starter | $9/mo | Positioning update; pricing page should be aligned | Tests individual willingness to pay for saved monitors |
+| Team monitor plan | $29/mo | Team API key exists; monitor framing needs emphasis | Better fit for recurring value |
+| Business alerts | $99/mo | Not implemented | Webhooks/alerts/audit history for higher-stakes workflows |
+
+### Decision Rule
+
+Track:
+
+`profile_view -> first_successful_tool_call -> create_monitor -> run_monitor_now -> generate_change_report -> checkout_started -> checkout_completed`
+
+If profile views continue but `first_successful_tool_call` remains near zero, do not mention paid tools earlier. Keep fixing activation.
+
+If first calls happen but no monitors are created, the paid workflow is unclear. Move monitor examples and "watch this claim" prompts higher.
+
+If monitors are created but no checkout starts, package the paid promise as alerts/history/reports rather than tool access.
+
+### Listing Copy To Use
+
+Short description:
+
+> Free first MCP call: run `check_endpoint` with `url=https://example.com`. Paid plans add saved monitors, scheduled checks, evidence history, and change reports for agent claims.
+
+Paid-plan copy:
+
+> Stop agents from repeating stale claims. Monitor pricing pages, docs, endpoints, packages, trust pages, and vendor claims on a schedule, then review the evidence history when something changes.

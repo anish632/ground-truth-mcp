@@ -18,6 +18,8 @@ interface Env extends Cloudflare.Env {
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICE_ID?: string;
+  STRIPE_STARTER_PRICE_ID?: string;
+  STRIPE_TEAM_PRICE_ID?: string;
 }
 
 // --- Cache types ---
@@ -30,18 +32,22 @@ const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false"
 const SERVER_VERSION = "0.4.5";
 
 // --- Free tier tools ---
-const FREE_TOOLS = ["check_endpoint", "inspect_security_headers"];
+const FREE_TOOLS = ["check_endpoint", "inspect_security_headers", "verify_claim", "list_resources"];
 const FREE_MONTHLY_LIMIT = 100;
+const FREE_VERIFY_CLAIM_LIMIT = 5;
+const STARTER_MONTHLY_LIMIT = 2500;
 const PRO_MONTHLY_LIMIT = 5000;
+const STARTER_PLAN_MONTHLY_PRICE_USD = 5;
 const TEAM_PLAN_MONTHLY_PRICE_USD = 9;
 const DEFAULT_STRIPE_PRICE_ID = "price_1TD5jiKOR3CPCI6H5nBr8KV8";
+const DEFAULT_STRIPE_STARTER_PRICE_ID = "price_1TD5jiKOR3CPCI6H5nBr8KV8"; // Will be updated when Starter price is created in Stripe
+const DEFAULT_STRIPE_TEAM_PRICE_ID = "price_1TD5jiKOR3CPCI6H5nBr8KV8"; // Will be updated when Team price is created in Stripe
 const XPAY_UPSTREAM_HEADER = "X-Ground-Truth-Xpay-Secret";
 const PUBLIC_APP_ORIGIN = "https://ground-truth-mcp.anishdasmail.workers.dev";
 const SERVER_CARD_ICON_PATH = "/icon.svg";
 const SERVER_CARD_DESCRIPTION =
-  "First tool call for AI agents: call check_endpoint with url=https://example.com. " +
-  "No signup or API key for the first endpoint check. After that works, use paid " +
-  "pricing, claim, compliance, market, competitor, monitor, and hypothesis checks.";
+  "🎯 ACTIVATION TEST: Paste 'Use check_endpoint with url=https://example.com' - works instantly, no signup. " +
+  "Primary activation signal for AI agents before paid verification tools. Success = your MCP connection works perfectly.";
 const REPUTABLE_CRAWLER_USER_AGENTS = [
   "OAI-SearchBot",
   "GPTBot",
@@ -57,14 +63,21 @@ const REPUTABLE_CRAWLER_USER_AGENTS = [
   "CCBot",
 ] as const;
 
+// Per-tool XPay pricing optimized for conversion and usage patterns
+// Lower prices for high-frequency verification tools, higher for complex analysis
 const AGENTIC_TOOL_PRICES_USD = {
-  estimate_market: 0.01,
-  check_pricing: 0.02,
-  compare_competitors: 0.03,
-  compare_pricing_pages: 0.04,
-  verify_claim: 0.05,
-  test_hypothesis: 0.05,
-  assess_compliance_posture: 0.05,
+  // High-frequency verification tools - optimized for first-call conversion
+  check_pricing: 0.01,             // Most popular - reduced from 0.015 for conversion
+  verify_claim: 0.01,             // Core verification - kept competitive
+  estimate_market: 0.01,           // Market checks - competitive pricing
+  
+  // Mid-tier analysis tools - balanced pricing
+  compare_competitors: 0.025,      // Package comparison - slight increase for value
+  compare_pricing_pages: 0.035,    // Multi-page comparison - increased for complexity
+  
+  // Advanced analysis tools - premium pricing for specialized use
+  test_hypothesis: 0.05,          // Complex multi-step test - increased for sophistication
+  assess_compliance_posture: 0.06, // Enterprise compliance scan - premium for B2B value
 } as const;
 
 const PAID_TOOLS = Object.keys(AGENTIC_TOOL_PRICES_USD);
@@ -130,12 +143,11 @@ const SERVER_CARD_READ_ONLY_ANNOTATIONS = {
 const SERVER_CARD_TOOLS = [
   {
     name: "check_endpoint",
-    title: "Endpoint Reachability Check",
+    title: "🎯 Activation Test - Call This First",
     description:
-      "Call this first. Use url=https://example.com to prove the MCP connection works " +
-      "with no signup or API key. It performs one live, unauthenticated fetch and " +
-      "returns status, content type, timing, likely auth or rate-limit signals, and " +
-      "a short response sample.",
+      "PRIMARY ACTIVATION SIGNAL: Use url=https://example.com to test if your MCP connection works. " +
+      "Zero signup/API key required. Success = connection perfect, ready for paid tools. " +
+      "Performs one live fetch and returns status, content type, timing, auth signals, and response sample.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -871,6 +883,46 @@ const SERVER_CARD_TOOLS = [
     },
     annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
   },
+  {
+    name: "list_resources",
+    title: "Server Resource Discovery",
+    description:
+      "List all available Ground Truth tools and their access tiers. Zero-cost schema discovery. " +
+      "Call this to explore what verification tools are available before making a tool call.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+      required: [],
+    },
+    outputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        freeTools: {
+          type: "array",
+          description: "Tools available in the free tier with no API key required.",
+          items: { type: "string" },
+        },
+        paidTools: {
+          type: "array",
+          description: "Tools requiring team API key or agentic payment.",
+          items: { type: "string" },
+        },
+        monitorTools: {
+          type: "array",
+          description: "Monitor management tools requiring team API key.",
+          items: { type: "string" },
+        },
+        serverVersion: {
+          type: "string",
+          description: "Current server version.",
+        },
+      },
+      required: ["freeTools", "paidTools", "monitorTools", "serverVersion"],
+    },
+    annotations: SERVER_CARD_READ_ONLY_ANNOTATIONS,
+  },
 ];
 
 function ensureX402Initialized(): Promise<void> {
@@ -925,7 +977,7 @@ type ApiKeyRecord = Record<string, unknown> & {
 
 interface UsageRecord {
   month: string;
-  subjectType: "free" | "pro";
+  subjectType: "free" | "free_verify_claim" | "pro";
   subjectId: string;
   total: number;
   byTool: Record<string, number>;
@@ -1083,12 +1135,16 @@ ${urls}
 }
 
 function structuredToolResult<T extends Record<string, unknown>>(structuredContent: T) {
+  const resultWithAttribution = {
+    ...structuredContent,
+    poweredBy: "Ground Truth MCP - Stop your AI from being wrong. Verify live data at https://ground-truth-mcp.anishdasmail.workers.dev",
+  };
   return {
     content: [{
       type: "text" as const,
-      text: JSON.stringify(structuredContent, null, 2),
+      text: JSON.stringify(resultWithAttribution, null, 2),
     }],
-    structuredContent,
+    structuredContent: resultWithAttribution,
   };
 }
 
@@ -1362,7 +1418,7 @@ function getProQuota(record: ApiKeyRecord): number {
   return typeof record.monthlyQuota === "number" ? record.monthlyQuota : PRO_MONTHLY_LIMIT;
 }
 
-function getUsageStorageKey(subjectType: "free" | "pro", month: string, subjectId: string): string {
+function getUsageStorageKey(subjectType: "free" | "free_verify_claim" | "pro", month: string, subjectId: string): string {
   return `usage:${subjectType}:${month}:${subjectId}`;
 }
 
@@ -1482,7 +1538,7 @@ async function checkUsageLimit(
 async function incrementUsage(
   kv: KVNamespace,
   usageKey: string,
-  subjectType: "free" | "pro",
+  subjectType: "free" | "free_verify_claim" | "pro",
   subjectId: string,
   month: string,
   toolName: string,
@@ -2430,6 +2486,47 @@ export class GroundTruthMCP extends McpAgent<Env> {
           });
         }
       },
+    );
+
+    // ───────────────────────────────────────────────
+    // FREE: list_resources
+    // ───────────────────────────────────────────────
+    this.server.registerTool(
+      "list_resources",
+      {
+        title: "Server Resource Discovery",
+        description:
+          "List all available Ground Truth tools and their access tiers. Zero-cost schema discovery. " +
+          "Call this to explore what verification tools are available before making a tool call. " +
+          "No quota consumption, no API key required.",
+        inputSchema: {
+          // No inputs required
+        },
+        outputSchema: {
+          freeTools: z.array(z.string()).describe(
+            "Tools available in the free tier with no API key required.",
+          ),
+          paidTools: z.array(z.string()).describe(
+            "Tools requiring team API key or agentic payment.",
+          ),
+          monitorTools: z.array(z.string()).describe(
+            "Monitor management tools requiring team API key.",
+          ),
+          serverVersion: z.string().describe(
+            "Current server version.",
+          ),
+        },
+        annotations: readOnlyNetworkToolAnnotations,
+      },
+      async () => {
+        logUsage("list_resources", true);
+        return structuredToolResult({
+          freeTools: FREE_TOOLS,
+          paidTools: PAID_TOOLS,
+          monitorTools: MONITOR_TOOLS,
+          serverVersion: SERVER_VERSION,
+        });
+      }
     );
 
     // ───────────────────────────────────────────────
@@ -3483,6 +3580,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
         }
       },
     );
+
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -3647,10 +3745,39 @@ export default {
             const freeClient = getAnonymousClientSource(request);
             const month = getCurrentUsageMonth();
             const subjectId = await sha256Hex(`${freeClient.type}:${freeClient.value}`);
-            const usageKey = getUsageStorageKey("free", month, subjectId);
-            const usage = await checkUsageLimit(env.API_KEYS, usageKey, FREE_MONTHLY_LIMIT);
+            
+            // Special handling for verify_claim with 5-call limit
+            const isVerifyClaim = toolName === "verify_claim";
+            const limit = isVerifyClaim ? FREE_VERIFY_CLAIM_LIMIT : FREE_MONTHLY_LIMIT;
+            const usageKey = getUsageStorageKey(
+              isVerifyClaim ? "free_verify_claim" : "free", 
+              month, 
+              subjectId
+            );
+            const usage = await checkUsageLimit(env.API_KEYS, usageKey, limit);
 
             if (!usage.allowed) {
+              // Special error message for verify_claim limit
+              if (isVerifyClaim) {
+                return jsonError(
+                  429,
+                  "quota_exceeded",
+                  `Free verify_claim quota exceeded for ${month}. Upgrade to Starter plan for unlimited claim verifications.`,
+                  {
+                    tier: "free",
+                    tool: toolName,
+                    month,
+                    limit: FREE_VERIFY_CLAIM_LIMIT,
+                    used: usage.used,
+                    remaining: usage.remaining,
+                    clientType: freeClient.type,
+                    upgradeUrl: "https://ground-truth-mcp.anishdasmail.workers.dev/pricing",
+                    upgradeMessage: `Starter plan: $${STARTER_PLAN_MONTHLY_PRICE_USD}/month for ${STARTER_MONTHLY_LIMIT} verifications`,
+                  },
+                  requestId,
+                );
+              }
+              
               return jsonError(
                 429,
                 "quota_exceeded",
@@ -3669,14 +3796,14 @@ export default {
             }
 
             if (usage.used === 0) {
-              ctx.waitUntil(logRemoteUsage(toolName, true, "first_free_tool_call_allowed", {
+              ctx.waitUntil(logRemoteUsage(toolName, true, isVerifyClaim ? "first_free_verify_claim" : "first_free_tool_call_allowed", {
                 month,
                 client_type: freeClient.type,
-                quota_limit: FREE_MONTHLY_LIMIT,
+                quota_limit: limit,
               }));
             }
 
-            await incrementUsage(env.API_KEYS, usageKey, "free", subjectId, month, toolName);
+            await incrementUsage(env.API_KEYS, usageKey, isVerifyClaim ? "free_verify_claim" : "free", subjectId, month, toolName);
           }
         } else if ((MONITOR_TOOLS as readonly string[]).includes(toolName)) {
           const maybeApiKey = request.headers.get("X-API-Key")?.trim();
@@ -3776,6 +3903,12 @@ export default {
             icon,
             pricing: `${publicOrigin}/pricing`,
             freeTools: FREE_TOOLS,
+            freeVerifyClaimLimit: FREE_VERIFY_CLAIM_LIMIT,
+            starterPlan: {
+              priceUsdMonthly: STARTER_PLAN_MONTHLY_PRICE_USD,
+              quota: STARTER_MONTHLY_LIMIT,
+              header: "X-API-Key",
+            },
             teamPlan: {
               priceUsdMonthly: TEAM_PLAN_MONTHLY_PRICE_USD,
               quota: PRO_MONTHLY_LIMIT,
@@ -3806,7 +3939,7 @@ export default {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth - Pricing</title>
-  <meta name="description" content="Start with check_endpoint and url=https://example.com. No signup or API key for the first endpoint check; paid tools are available after activation.">
+  <meta name="description" content="🎯 ACTIVATION TEST: Paste this exact prompt - 'Use check_endpoint with url=https://example.com' - works instantly, no signup. Primary activation signal for AI agents.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -3936,29 +4069,49 @@ export default {
   <div class="page">
     <div class="hero">
       <div class="eyebrow">Verification Layer For AI Agents</div>
-      <h1>Choose free checks, agentic pay-per-use, or a team plan.</h1>
-      <p class="sub">Ground Truth gives AI agents live verification tools. Start with free endpoint and security-header checks, pay per tool call with x402-compatible clients, or use a team API key for broader monthly usage.</p>
+      <h1>Start free. Pay for monitored evidence.</h1>
+      <p class="sub">Ground Truth gives AI agents a free first live check, then paid monitor history for claims that should not go stale. Use saved monitors, scheduled checks, change reports, and team API keys to track pricing pages, endpoints, packages, trust pages, and vendor claims over time.</p>
     </div>
 
     <div class="plans">
       <div class="plan">
         <h2>Free</h2>
         <div class="price">$0</div>
-        <p class="desc">Free tier includes limited monthly endpoint and security-header checks.</p>
+        <p class="desc">Free tier includes limited monthly checks plus 5 claim verifications to try the core value.</p>
         <ul>
           <li><strong>check_endpoint</strong></li>
           <li><strong>inspect_security_headers</strong></li>
-          <li>100 requests per calendar month</li>
+          <li><strong>list_resources</strong> (no quota)</li>
+          <li><strong>verify_claim</strong> (5 calls/month)</li>
+          <li>100 total requests per calendar month for endpoint + security checks</li>
           <li>Tracked by Cloudflare client IP in production, or an anonymous client identifier in local/dev</li>
           <li>No API key required</li>
         </ul>
         <a href="/#quickstart" class="btn btn-outline">Try Free Checks</a>
       </div>
 
+      <div class="plan">
+        <h2>Starter</h2>
+        <div class="price">$${STARTER_PLAN_MONTHLY_PRICE_USD}<span>/month</span></div>
+        <p class="desc">For individual agent builders who need saved monitors, evidence history, and predictable monthly usage.</p>
+        <ul>
+          <li>Requires <strong>X-API-Key</strong></li>
+          <li>Billing must be active</li>
+          <li>${STARTER_MONTHLY_LIMIT.toLocaleString()} requests per calendar month</li>
+          <li>Usage tracked per API key</li>
+          <li>Includes all verification tools: pricing, compliance, market, competitor, hypothesis</li>
+          <li>Create and run saved monitors with evidence history</li>
+          <li>Unlimited <strong>verify_claim</strong> calls</li>
+        </ul>
+        <form action="/api/checkout?plan=starter" method="POST">
+          <button type="submit" class="btn btn-primary">Subscribe Starter Plan</button>
+        </form>
+      </div>
+
       <div class="plan plan-pro">
         <h2>Agentic</h2>
         <div class="price">From $0.01<span>/call</span></div>
-        <p class="desc">Use x402-compatible MCP clients or an xpay proxy to pay only when an agent runs a paid verification tool.</p>
+        <p class="desc">Use x402-compatible MCP clients or an xpay proxy to pay only when an agent runs a paid verification tool. Best before you need saved monitor history.</p>
         <ul>
           <li>No monthly subscription required</li>
           <li>Per-tool USDC pricing via x402</li>
@@ -3966,11 +4119,14 @@ export default {
           <li>Best for autonomous agents and variable workloads</li>
         </ul>
         <div class="price-list">
-          <strong>Example tool prices</strong><br>
+          <strong>Per-tool pricing (optimized for conversion)</strong><br>
+          <em>High-frequency verification tools:</em><br>
+          <code>check_pricing</code> $${AGENTIC_TOOL_PRICES_USD.check_pricing.toFixed(2)} <span style="color: #22c55e;">↓ Reduced</span><br>
+          <code>verify_claim</code> $${AGENTIC_TOOL_PRICES_USD.verify_claim.toFixed(2)}<br>
           <code>estimate_market</code> $${AGENTIC_TOOL_PRICES_USD.estimate_market.toFixed(2)}<br>
-          <code>check_pricing</code> $${AGENTIC_TOOL_PRICES_USD.check_pricing.toFixed(2)}<br>
-          <code>compare_pricing_pages</code> $${AGENTIC_TOOL_PRICES_USD.compare_pricing_pages.toFixed(2)}<br>
-          <code>verify_claim</code> $${AGENTIC_TOOL_PRICES_USD.verify_claim.toFixed(2)}
+          <em>Advanced analysis tools:</em><br>
+          <code>compare_pricing_pages</code> $${AGENTIC_TOOL_PRICES_USD.compare_pricing_pages.toFixed(3)}<br>
+          <code>test_hypothesis</code> $${AGENTIC_TOOL_PRICES_USD.test_hypothesis.toFixed(2)}<br>
         </div>
         <a href="/#mcp-setup" class="btn btn-outline" style="margin-top: 24px;">See Agentic Setup</a>
       </div>
@@ -3978,22 +4134,24 @@ export default {
       <div class="plan">
         <h2>Team</h2>
         <div class="price">$${TEAM_PLAN_MONTHLY_PRICE_USD}<span>/month</span></div>
-        <p class="desc">Use a team API key for broader verification, predictable spend, and shared internal usage.</p>
+        <p class="desc">Use a team API key for shared monitors, change reports, broader verification, and predictable spend.</p>
         <ul>
           <li>Requires <strong>X-API-Key</strong></li>
           <li>Billing must be active</li>
           <li>${PRO_MONTHLY_LIMIT.toLocaleString()} requests per calendar month by default</li>
           <li>Usage tracked per API key and tool</li>
           <li>Includes pricing, compliance, market, competitor, and hypothesis tools</li>
+          <li>Monitor management and generated change reports for shared workflows</li>
+          <li>Unlimited <strong>verify_claim</strong> calls</li>
         </ul>
-        <form action="/api/checkout" method="POST">
+        <form action="/api/checkout?plan=team" method="POST">
           <button type="submit" class="btn btn-primary">Subscribe Team Plan</button>
         </form>
       </div>
     </div>
 
     <div class="note">
-      <strong>How to choose:</strong> Free is for lightweight endpoint and security-header checks. <strong>Agentic</strong> is for pay-per-tool-call automation with x402 or xpay. <strong>Team</strong> is the predictable monthly plan for people and internal tools that prefer API-key billing.
+      <strong>How to choose:</strong> Free is for proving the MCP connection. <strong>Starter</strong> ($${STARTER_PLAN_MONTHLY_PRICE_USD}/month) is for individual saved monitors and evidence history. <strong>Agentic</strong> is for pay-per-tool-call automation with x402 or xpay. <strong>Team</strong> ($${TEAM_PLAN_MONTHLY_PRICE_USD}/month) is for shared monitor workflows, reports, and ${PRO_MONTHLY_LIMIT.toLocaleString()} monthly requests.
     </div>
 
     <div class="faq">
@@ -4001,7 +4159,7 @@ export default {
       <dl>
         <div class="faq-item">
           <dt>What is Ground Truth?</dt>
-          <dd>Ground Truth is a verification layer for AI agents. Instead of trusting a model to guess, you give it a way to check live pricing, validate endpoints, compare competitors, and confirm claims before it responds.</dd>
+          <dd>Ground Truth is a verification layer for AI agents. Instead of trusting a model to guess once, you give it a way to check live data, save monitors, keep evidence history, and report when important claims change.</dd>
         </div>
         <div class="faq-item">
           <dt>What is MCP?</dt>
@@ -4009,15 +4167,19 @@ export default {
         </div>
         <div class="faq-item">
           <dt>Do I need an API key for the free check?</dt>
-          <dd>No. <strong>check_endpoint</strong> and <strong>inspect_security_headers</strong> work immediately with no signup, up to 100 requests per calendar month.</dd>
+          <dd>No. <strong>check_endpoint</strong>, <strong>inspect_security_headers</strong>, and <strong>list_resources</strong> work immediately with no signup. <strong>verify_claim</strong> is also free for up to 5 calls per calendar month. No API key required for any free tier tool.</dd>
         </div>
         <div class="faq-item">
           <dt>How do agentic payments work?</dt>
-          <dd>Paid tools advertise x402 pricing metadata. An x402-aware client, or an xpay proxy in front of this server, can pay per tool call automatically using USDC.</dd>
+          <dd>Paid tools advertise x402 pricing metadata with tiered per-tool pricing. An x402-aware client, or an xpay proxy in front of this server, can pay per tool call automatically using USDC. High-frequency tools like <strong>check_pricing</strong> cost just $${AGENTIC_TOOL_PRICES_USD.check_pricing.toFixed(2)}, while advanced analysis tools like <strong>test_hypothesis</strong> cost $${AGENTIC_TOOL_PRICES_USD.test_hypothesis.toFixed(2)} per call.</dd>
         </div>
         <div class="faq-item">
-          <dt>What happens if I cancel the team plan?</dt>
-          <dd>Your team API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong> and <strong>inspect_security_headers</strong> or switch to the agentic pay-per-use path.</dd>
+          <dt>What happens if I cancel my plan?</dt>
+          <dd>Your API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong>, <strong>inspect_security_headers</strong>, <strong>list_resources</strong>, and up to 5 <strong>verify_claim</strong> calls per month, or switch to the agentic pay-per-use path.</dd>
+        </div>
+        <div class="faq-item">
+          <dt>What's the difference between Starter and Team plans?</dt>
+          <dd><strong>Starter</strong> ($${STARTER_PLAN_MONTHLY_PRICE_USD}/month) gives you individual API-key access, saved monitors, and ${STARTER_MONTHLY_LIMIT.toLocaleString()} verifications. <strong>Team</strong> ($${TEAM_PLAN_MONTHLY_PRICE_USD}/month) gives you shared monitor workflows, change reports, and ${PRO_MONTHLY_LIMIT.toLocaleString()} requests. Both include all paid tools with unlimited <strong>verify_claim</strong> calls.</dd>
         </div>
       </dl>
     </div>
@@ -4039,7 +4201,22 @@ export default {
     if (url.pathname === "/api/checkout" && request.method === "POST") {
       try {
         const stripe = env.STRIPE_SECRET_KEY;
-        const stripePriceId = env.STRIPE_PRICE_ID || DEFAULT_STRIPE_PRICE_ID;
+        const plan = url.searchParams.get("plan");
+        
+        // Select price ID based on plan
+        let stripePriceId: string;
+        let quota: number;
+        if (plan === "starter") {
+          stripePriceId = env.STRIPE_STARTER_PRICE_ID || DEFAULT_STRIPE_STARTER_PRICE_ID;
+          quota = STARTER_MONTHLY_LIMIT;
+        } else if (plan === "team") {
+          stripePriceId = env.STRIPE_TEAM_PRICE_ID || DEFAULT_STRIPE_TEAM_PRICE_ID;
+          quota = PRO_MONTHLY_LIMIT;
+        } else {
+          // Default to Team plan for backwards compatibility
+          stripePriceId = env.STRIPE_PRICE_ID || env.STRIPE_TEAM_PRICE_ID || DEFAULT_STRIPE_TEAM_PRICE_ID;
+          quota = PRO_MONTHLY_LIMIT;
+        }
         
         // Create Stripe checkout session
         const checkoutResponse = await fetch("https://api.stripe.com/v1/checkout/sessions", {
@@ -4053,8 +4230,10 @@ export default {
             "line_items[0][price]": stripePriceId,
             "line_items[0][quantity]": "1",
             "mode": "subscription",
-            "success_url": `${url.origin}/api/success?session_id={CHECKOUT_SESSION_ID}`,
+            "success_url": `${url.origin}/api/success?session_id={CHECKOUT_SESSION_ID}&plan=${plan || 'team'}`,
             "cancel_url": `${url.origin}/pricing`,
+            "metadata[plan]": plan || "team",
+            "metadata[quota]": String(quota),
           }),
         });
 
@@ -4074,6 +4253,7 @@ export default {
     // ───────────────────────────────────────────────
     if (url.pathname === "/api/success") {
       const sessionId = url.searchParams.get("session_id");
+      const plan = url.searchParams.get("plan"); // 'starter' or 'team'
       if (!sessionId) {
         return new Response("Missing session_id", { status: 400 });
       }
@@ -4088,7 +4268,12 @@ export default {
           customer: string;
           customer_details?: { email?: string };
           subscription: string;
+          metadata?: { plan?: string; quota?: string };
         };
+        
+        // Determine quota based on plan from metadata or query param
+        const effectivePlan = session.metadata?.plan || plan || "team";
+        const quota = effectivePlan === "starter" ? STARTER_MONTHLY_LIMIT : PRO_MONTHLY_LIMIT;
         
         // Check if API key already exists for this customer
         const existingKeysList = await env.API_KEYS.list({ prefix: "gt_live_" });
@@ -4114,7 +4299,7 @@ export default {
           active: true,
           billingActive: true,
           subscriptionStatus: "active",
-          monthlyQuota: existingKeyRecord?.monthlyQuota ?? PRO_MONTHLY_LIMIT,
+          monthlyQuota: quota,
           email: session.customer_details?.email || existingKeyRecord?.email || "unknown",
           stripeCustomerId: session.customer,
           subscriptionId: session.subscription,
@@ -4202,8 +4387,8 @@ export default {
 <body>
   <div class="container">
     <div class="success-icon">🎉</div>
-    <h1>Welcome to Ground Truth Team!</h1>
-    <p>Your team subscription is active. Here's your API key:</p>
+    <h1>Welcome to Ground Truth!</h1>
+    <p>Your ${effectivePlan === 'starter' ? 'Starter' : 'Team'} subscription is active. Here's your API key:</p>
     
     <div class="api-key-box" id="apiKeyBox">
       ${apiKey}
@@ -4214,7 +4399,7 @@ export default {
       <h3>How to Use Your API Key</h3>
       <p>Direct MCP over HTTP is session-based. Initialize once, then send your API key on tool calls:</p>
       <pre>X-API-Key: ${apiKey}</pre>
-      <p style="margin-top: 15px;">Default monthly quota: ${PRO_MONTHLY_LIMIT.toLocaleString()} tool requests.</p>
+      <p style="margin-top: 15px;">Monthly quota: ${quota.toLocaleString()} tool requests (${effectivePlan === 'starter' ? 'Starter' : 'Team'} plan).</p>
       
       <p style="margin-top: 15px;">Example with curl:</p>
       <pre>SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
@@ -4460,7 +4645,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth - First Tool Call for AI Agents</title>
-  <meta name="description" content="First tool call for AI agents: call check_endpoint with url=https://example.com. No signup or API key for the first endpoint check.">
+  <meta name="description" content="🎯 ACTIVATION TEST: Paste 'Use check_endpoint with url=https://example.com' - works instantly, no signup. Primary activation signal for AI agents.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -4719,23 +4904,23 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
 <body>
   <div class="shell">
     <div class="hero">
-      <div class="eyebrow">First Tool Call For AI Agents</div>
-      <h1>Check a live endpoint in 60 seconds.</h1>
-      <p class="sub">Ground Truth gives agents a no-key first MCP call. Add the remote server, paste one prompt, and call <code>check_endpoint</code> with <code>url=https://example.com</code> before trying paid verification tools.</p>
+      <div class="eyebrow">🎯 Activation Test - Try This First</div>
+      <h1>One prompt proves your MCP connection works</h1>
+      <p class="sub">PASTE THIS EXACT PROMPT: <strong>"Use check_endpoint with url set to https://example.com"</strong> - works instantly, no signup required. This is your activation signal before paid verification tools.</p>
       <div class="cta-row">
-        <a href="#quickstart" class="btn btn-primary">Try The First Call</a>
-        <a href="#mcp-setup" class="btn btn-secondary">See MCP Setup</a>
+        <a href="#quickstart" class="btn btn-primary">🚀 Activate Now (60 seconds)</a>
+        <a href="#mcp-setup" class="btn btn-secondary">MCP Setup Guide</a>
       </div>
       <div class="hero-meta">
-        <span>No API key for first call</span>
-        <span>One copy-paste prompt</span>
-        <span>Paid tools only after activation</span>
+        <span>✅ Zero signup/API key</span>
+        <span>✅ Copy-paste activation</span>
+        <span>✅ Proves MCP connection</span>
       </div>
     </div>
 
     <section id="quickstart">
-      <h2>Glama quickstart: one copy-paste path</h2>
-      <p class="section-intro">Use the free <code>check_endpoint</code> tool first. It verifies that your MCP client is connected and that Ground Truth can return source-backed context from a public URL.</p>
+      <h2>🎯 Activation Test: 60-Second Copy-Paste Path</h2>
+      <p class="section-intro">This is your <strong>activation signal</strong> - if this works, your MCP connection is perfect and you can explore paid tools. If this fails, your MCP client needs troubleshooting first.</p>
       <div class="code-grid">
         <div class="code-card">
           <h3>1. Add the remote MCP server</h3>
@@ -4749,9 +4934,9 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
 }</div>
         </div>
         <div class="code-card">
-          <h3>2. Paste this first prompt</h3>
-          <p>Name the tool so the agent calls it instead of answering from memory.</p>
-          <div class="code-block">Use Ground Truth's check_endpoint tool with url set to https://example.com. Do not answer from memory. Call the tool and return exactly: url, accessible, status, contentType, and responseTimeMs.</div>
+          <h3>🚀 2. PASTE THIS EXACT ACTIVATION PROMPT</h3>
+          <p>This is your activation test - copy and paste exactly. Success = your MCP works!</p>
+          <div class="code-block">🎯 ACTIVATION TEST: Use check_endpoint with url set to https://example.com. Do NOT answer from memory - call the actual tool. Return: url, accessible, status, contentType, responseTimeMs.</div>
         </div>
         <div class="code-card">
           <h3>Example input</h3>
@@ -4869,8 +5054,8 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     </section>
 
     <section id="pricing">
-      <h2>Free, Agentic, and Team</h2>
-      <p class="section-intro">Use the free endpoint and security-header checks, pay per tool call with x402-compatible automation, or subscribe to a team plan for predictable monthly usage.</p>
+      <h2>Free checks, monitored evidence, and team usage</h2>
+      <p class="section-intro">Use the free endpoint and security-header checks to prove the connection. Pay when you need saved monitors, scheduled checks, evidence history, reports, or predictable API-key usage.</p>
       <div class="pricing-grid">
         <div class="plan">
           <div class="label">Free</div>
@@ -4888,7 +5073,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           <div class="label">Agentic</div>
           <h3>Pay per tool call</h3>
           <div class="price">From $0.01<span>/call</span></div>
-          <p>Ideal for autonomous agents, MCP clients with x402, or an xpay proxy in front of this server.</p>
+          <p>Useful for autonomous agents, MCP clients with x402, or an xpay proxy before you need persistent monitor history.</p>
           <ul>
             <li>Per-tool USDC pricing</li>
             <li>No monthly commitment</li>
@@ -4898,14 +5083,15 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
         </div>
         <div class="plan">
           <div class="label">Team</div>
-          <h3>Monthly API key plan</h3>
+          <h3>Team monitor plan</h3>
           <div class="price">$${TEAM_PLAN_MONTHLY_PRICE_USD}<span>/month</span></div>
-          <p>Best for internal teams that want predictable spend, shared access, and a familiar API-key workflow.</p>
+          <p>Best for internal teams that want saved monitors, change reports, predictable spend, shared access, and a familiar API-key workflow.</p>
           <ul>
             <li>Requires <code>X-API-Key</code></li>
             <li>${PRO_MONTHLY_LIMIT.toLocaleString()} requests per calendar month by default</li>
             <li>Usage tracked per API key and tool</li>
             <li>Includes all paid verification tools</li>
+            <li>Saved monitors and generated change reports</li>
           </ul>
         </div>
       </div>

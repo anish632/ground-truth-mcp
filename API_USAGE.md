@@ -81,19 +81,20 @@ Paid tools also support agentic pay-per-use.
 
 - Use an x402-compatible MCP client, or put an xpay proxy in front of the live `/mcp` URL
 - Tool pricing starts at `$0.01` per call and varies by tool
-- Best for autonomous agents and variable workloads
+- Best for autonomous agents and variable workloads before you need saved monitor history
 - Includes every paid verification tool
 
 ### Team
 
-Team billing uses a monthly subscription and `X-API-Key`.
+Team billing uses a monthly subscription, `X-API-Key`, saved monitors, and evidence history.
 
 - Requires `X-API-Key` with active billing
 - Default quota of 5,000 requests per calendar month
 - Monthly usage tracked per API key and tool
 - Includes every paid verification tool
+- Includes monitor management tools and generated change reports
 
-To use the team plan, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing) and send your key in `X-API-Key`.
+To use the team plan, subscribe at [ground-truth-mcp.anishdasmail.workers.dev/pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing), create monitors for claims that should not go stale, and send your key in `X-API-Key`.
 
 ---
 
@@ -680,6 +681,7 @@ Use [test-usage-enforcement.sh](./test-usage-enforcement.sh) for lightweight req
 ### Support
 
 - Verify a pricing claim before a customer sees it
+- Monitor support, pricing, or policy pages that agents quote repeatedly
 - Confirm whether a support policy applies before escalating
 - Check whether an API endpoint is live before recommending it
 
@@ -689,11 +691,13 @@ Use [test-usage-enforcement.sh](./test-usage-enforcement.sh) for lightweight req
 - Check whether a competitor exists before saying the category is open
 - Compare package popularity before making a stack decision
 - Compare pricing pages before repeating vendor positioning
+- Generate a change report before updating docs, sales copy, or internal enablement
 
 ### Compliance
 
 - Scan trust pages for SOC 2, GDPR, HIPAA, DPA, SSO, and SCIM signals
 - Check public terms, trust, and pricing pages before quoting them internally
+- Keep monitor history for high-risk vendor and compliance claims
 
 ### Security and vendor diligence
 

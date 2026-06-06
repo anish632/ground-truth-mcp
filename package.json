@@ -1,8 +1,8 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.4.5",
+	"version": "0.4.9",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "First tool call for AI agents: call check_endpoint with url=https://example.com. No signup or API key for the first endpoint check.",
+	"description": "First tool call for AI agents: call check_endpoint with url=https://example.com. Paid plans add saved monitors, scheduled checks, evidence history, and change reports.",
 	"keywords": [
 		"mcp",
 		"mcp-server",
@@ -25,7 +25,10 @@
 		"market-research",
 		"live-data",
 		"cloudflare-workers",
-		"x402"
+		"x402",
+		"first-tool-call",
+		"endpoint-check",
+		"list-resources"
 	],
 	"author": "Anish Das <anishdasmail@gmail.com>",
 	"license": "MIT",

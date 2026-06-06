@@ -4,6 +4,8 @@
 
 Ground Truth gives AI agents read-only verification against live public data. The first action is one free tool call: `check_endpoint` with `url=https://example.com`.
 
+The paid product is persistent evidence, not a one-off lookup. After the first call works, teams pay for saved monitors, scheduled checks, change history, reports, webhooks/notifications, and API-key access that prevents agents from repeating stale pricing, claim, endpoint, package, or compliance facts.
+
 Do not start with pricing, compliance, claims, package-market, competitor, monitor, API-key, or payment examples. First prove the MCP connection works by calling `check_endpoint`.
 
 [![MCP](https://img.shields.io/badge/MCP-1.11.0-blue)](https://modelcontextprotocol.io)
@@ -124,6 +126,27 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \
 | **Security posture** | `inspect_security_headers` | Free |
 
 Paid tools (pricing, compliance, claims, package-market, competitor checks, and monitors) are documented in [Example Workflows](#example-workflows) and [Tool Reference](#tool-reference). Use them only after a successful free first call.
+
+## Paid Positioning: Monitored Evidence
+
+Do not sell Ground Truth as "an agent can check a page once." Browser agents and search tools can often approximate that.
+
+Sell Ground Truth as:
+
+> Monitored evidence and change alerts for agent claims.
+
+Paid value lives in durable workflows:
+
+- Saved monitors for URLs, endpoints, pricing pages, packages, vendor claims, and custom prompts
+- Scheduled hourly, daily, or weekly checks
+- Stored before/after values and confidence
+- Change reports for teams
+- API-key access with predictable usage
+- Future: Slack, email, webhook, or issue-tracker alerts
+
+The revenue metric to watch is:
+
+`first_successful_tool_call -> create_monitor -> run_monitor_now -> generate_change_report -> paid team key`
 
 ---
 
@@ -261,17 +284,27 @@ Paid tools also support agentic pay-per-use.
 
 - Use an x402-compatible MCP client, or put an [xpay MCP proxy](https://docs.xpay.sh/en/products/mcp-monetization) in front of this server
 - Tool pricing starts at `$0.01` per call and varies by tool
-- Best for autonomous agents or variable workloads
+- Best for autonomous agents or variable workloads that are not ready for saved monitors
 - Includes `estimate_market`, `check_pricing`, `compare_pricing_pages`, `compare_competitors`, `verify_claim`, `assess_compliance_posture`, and `test_hypothesis`
 
 ### Team
 
-Team subscription uses API-key billing with predictable monthly usage.
+Team subscription uses API-key billing with predictable monthly usage and monitor history.
 
 - Requires `X-API-Key` with active billing
 - Default quota of 5,000 requests per calendar month
 - Monthly usage tracked per API key and tool
 - Includes all paid verification tools
+- Includes monitor management: `create_monitor`, `list_monitors`, `run_monitor_now`, `get_monitor_result`, `delete_monitor`, and `generate_change_report`
+
+Suggested paid packaging:
+
+| Plan | Price | Best for | Paid promise |
+|---|---:|---|---|
+| Free | $0 | Connection proof | First endpoint/security checks |
+| Monitor Starter | $9/mo | Individual agent builders | 10 saved monitors, weekly checks, evidence history |
+| Team | $29/mo | Shared internal agents | Daily checks, reports, higher request quota |
+| Business | $99/mo | Revenue/support/compliance workflows | Webhooks, alert routing, higher monitor volume |
 
 [View pricing](https://ground-truth-mcp.anishdasmail.workers.dev/pricing)
 

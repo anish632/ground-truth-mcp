@@ -1,0 +1,78 @@
+{
+  "timestamp": "2026-06-06T01:51:28.354Z",
+  "platforms": {
+    "glama": {
+      "accessible": true,
+      "url": "https://glama.ai/mcp/servers/anish632/ground-truth-mcp",
+      "metrics": {}
+    },
+    "smithery": {
+      "accessible": true,
+      "url": "https://smithery.ai/servers/anish632/ground-truth",
+      "metrics": {}
+    },
+    "xpay": {
+      "accessible": true,
+      "url": "https://ground-truth-mcp-xpay.anishdasmail.workers.dev",
+      "status": "Active"
+    },
+    "main": {
+      "accessible": true,
+      "url": "https://ground-truth-mcp.anishdasmail.workers.dev",
+      "status": "Active"
+    }
+  },
+  "recommendations": [
+    "✅ Glama profile is active and discoverable by AI agents",
+    "📈 Monitor Glama score for search visibility in the registry",
+    "✅ Smithery page is active and supports Install button flow",
+    "🔧 Use Smithery CLI for updates: smithery mcp publish",
+    "✅ Xpay upstream is available for pay-per-use scenarios",
+    "💰 Configure xpay proxy for clients without native x402 support",
+    "✅ Main Ground Truth MCP server is operational",
+    "🔗 Use main server URL for direct MCP connections",
+    "🔧 Set up Cloudflare Analytics for main Worker deployment",
+    "📊 Monitor KV namespace usage with Cloudflare API",
+    "💳 Track xpay upstream usage separately for pay-per-use analytics",
+    "🎯 Use Glama and Smithery built-in analytics for marketplace performance",
+    "📈 Consider implementing custom usage endpoint for business intelligence",
+    "🔐 Secure usage data with proper authentication for admin access"
+  ],
+  "internalUsage": {
+    "storage": "Cloudflare KV (API_KEYS namespace)",
+    "keyPattern": "usage:{subjectType}:{month}:{subjectId}",
+    "subjectTypes": [
+      "free",
+      "free_verify_claim",
+      "pro"
+    ],
+    "valueStructure": {
+      "month": "YYYY-MM format",
+      "subjectType": "string",
+      "subjectId": "hashed identifier",
+      "total": "total requests count",
+      "byTool": "per-tool usage breakdown",
+      "updatedAt": "ISO timestamp"
+    },
+    "quotas": {
+      "free": {
+        "limit": 100,
+        "period": "monthly"
+      },
+      "verify_claim_free": {
+        "limit": 5,
+        "period": "monthly"
+      },
+      "starter": {
+        "limit": 2500,
+        "period": "monthly",
+        "price": "$5/month"
+      },
+      "team": {
+        "limit": 5000,
+        "period": "monthly",
+        "price": "$9/month"
+      }
+    }
+  }
+}
