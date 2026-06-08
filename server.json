@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.anish632/ground-truth",
   "title": "Ground Truth - First Tool Call",
-  "description": "🎯 Activation test: Use check_endpoint with url=https://example.com - works instantly without API key. Primary activation signal for AI agents before paid verification tools.",
-  "version": "0.4.8",
+  "description": "✅ Try check_endpoint with url=https://example.com - no API key needed for activation test.",
+  "version": "0.5.1",
   "remotes": [
     {
       "type": "streamable-http",

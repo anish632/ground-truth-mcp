@@ -1,6 +1,6 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.5.0",
+	"version": "0.5.1",
 	"mcpName": "io.github.anish632/ground-truth",
 	"description": "✅ Working in 60 seconds: Call check_endpoint with url=https://example.com. No signup, no API key. Stop your AI agents from being wrong with live data verification.",
 	"keywords": [
