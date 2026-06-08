@@ -1,12 +1,14 @@
 # Ground Truth
 
-**First tool call for AI agents: check a live endpoint in 60 seconds. No signup. No API key.**
+**✅ WORKING IN 60 SECONDS: No signup. No API key. Just verify live data.**
 
-Ground Truth gives AI agents read-only verification against live public data. The first action is one free tool call: `check_endpoint` with `url=https://example.com`.
+Stop your AI agents from being wrong. Ground Truth provides instant verification against live public data - starting with one completely free tool call.
 
-The paid product is persistent evidence, not a one-off lookup. After the first call works, teams pay for saved monitors, scheduled checks, change history, reports, webhooks/notifications, and API-key access that prevents agents from repeating stale pricing, claim, endpoint, package, or compliance facts.
+🎯 **First action:** Call `check_endpoint` with `url=https://example.com` 
+🆓 **100% Free:** First endpoint checks + security headers (100/month)
+⚡ **Instant setup:** Copy-paste config below
 
-Do not start with pricing, compliance, claims, package-market, competitor, monitor, API-key, or payment examples. First prove the MCP connection works by calling `check_endpoint`.
+**NEW USERS:** Skip all advanced features. Just prove the basic connection works first.
 
 [![MCP](https://img.shields.io/badge/MCP-1.11.0-blue)](https://modelcontextprotocol.io)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-orange)](https://workers.cloudflare.com)
@@ -16,12 +18,9 @@ Do not start with pricing, compliance, claims, package-market, competitor, monit
 
 ---
 
-## Glama Quickstart: One Copy-Paste Path
+## 🚀 60-SECOND WORKING TEST
 
-Use this exact path from Glama or any MCP client that supports remote Streamable HTTP.
-
-### 1. Add the remote server
-
+**Step 1: Copy this config** (Claude Desktop example)
 ```json
 {
   "mcpServers": {
@@ -32,13 +31,11 @@ Use this exact path from Glama or any MCP client that supports remote Streamable
 }
 ```
 
-No `X-API-Key` is needed for this first call.
+**Step 2: Restart your AI app, then paste this exact prompt:**
 
-### 2. Paste this prompt
+> Call Ground Truth `check_endpoint` tool with url=https://example.com now. Don't answer from memory.
 
-> Use Ground Truth's `check_endpoint` tool with `url` set to `https://example.com`. Do not answer from memory. Call the tool and return exactly: `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
-
-### 3. Confirm the tool result
+**Step 3: Expect this response shape:**
 
 ```json
 {
@@ -52,18 +49,21 @@ No `X-API-Key` is needed for this first call.
 
 `responseTimeMs` will vary. Seeing this shape means the first Ground Truth MCP tool call worked.
 
-### If the agent answers without a tool call
+**✅ Success!** If you see this JSON structure, Ground Truth is working.
 
-Reply with:
+**❌ AI answered from memory?** Try: "Use the check_endpoint MCP tool right now with https://example.com"
 
-> Call the MCP tool named `check_endpoint` now. Use `url=https://example.com`.
+## 🆓 What You Get For Free (100/month)
 
-## Free First Tools
+**`check_endpoint`** - Verify any URL/API is live
+- Returns: status code, response time, auth requirements
+- Perfect for: Agent workflows checking if endpoints exist
 
-After the first `check_endpoint` call works, these free tools work without signup or an API key:
+**`inspect_security_headers`** - Security header analysis  
+- Returns: HSTS, CSP, frame protections, security score
+- Perfect for: Compliance and security verification
 
-- `check_endpoint`: verify that a public URL or API endpoint responds.
-- `inspect_security_headers`: inspect HSTS, CSP, frame protections, and related browser-facing security headers.
+**No limits beyond 100 calls/month. No credit card. No signup.**
 
 ## Activation Measurement
 

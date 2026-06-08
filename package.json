@@ -2,7 +2,7 @@
 	"name": "ground-truth-mcp",
 	"version": "0.5.0",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "First tool call for AI agents: call check_endpoint with url=https://example.com. Paid plans add saved monitors, scheduled checks, evidence history, and change reports.",
+	"description": "✅ Working in 60 seconds: Call check_endpoint with url=https://example.com. No signup, no API key. Stop your AI agents from being wrong with live data verification.",
 	"keywords": [
 		"mcp",
 		"mcp-server",
