@@ -1,8 +1,9 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
-import type { PaymentRequirements } from "@x402/core/types";
+import { HTTPFacilitatorClient, x402ResourceServer as X402ResourceServer } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
+// Import types from the types module
+import type { PaymentPayload as X402PaymentPayload, PaymentRequirements as X402PaymentRequirements } from "@x402/core/types";
 import { z } from "zod";
 
 // --- Environment bindings ---
@@ -17,37 +18,101 @@ interface Env extends Cloudflare.Env {
   API_KEYS: KVNamespace;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
-  STRIPE_PRICE_ID?: string;
-  STRIPE_STARTER_PRICE_ID?: string;
-  STRIPE_TEAM_PRICE_ID?: string;
+  STRIPE_PRICE_ID: string;
+  MCP_OBJECT: DurableObjectNamespace<GroundTruthMCP>;
+  // Cloudflare Monetization Gateway with x402
+  MONETIZATION_GATEWAY: boolean;
+  X402_NETWORK: string;
+  X402_RECIPIENT: string;
+  X402_FACILITATOR_URL: string;
 }
 
 // --- Cache types ---
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_CACHEABLE_BODY_BYTES = 512 * 1024;
-const PAID_RESULT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // --- Remote Telemetry Config ---
 const TELEMETRY_ENABLED = workerProcess?.env?.GROUND_TRUTH_TELEMETRY !== "false";
-const SERVER_VERSION = "0.4.5";
+const SERVER_VERSION = "0.5.3";
 
 // --- Free tier tools ---
 const FREE_TOOLS = ["check_endpoint", "inspect_security_headers", "verify_claim", "list_resources"];
 const FREE_MONTHLY_LIMIT = 100;
 const FREE_VERIFY_CLAIM_LIMIT = 5;
-const STARTER_MONTHLY_LIMIT = 2500;
-const PRO_MONTHLY_LIMIT = 5000;
-const STARTER_PLAN_MONTHLY_PRICE_USD = 5;
-const TEAM_PLAN_MONTHLY_PRICE_USD = 9;
-const DEFAULT_STRIPE_PRICE_ID = "price_1TD5jiKOR3CPCI6H5nBr8KV8";
-const DEFAULT_STRIPE_STARTER_PRICE_ID = "price_1TD5jiKOR3CPCI6H5nBr8KV8"; // Will be updated when Starter price is created in Stripe
-const DEFAULT_STRIPE_TEAM_PRICE_ID = "price_1TD5jiKOR3CPCI6H5nBr8KV8"; // Will be updated when Team price is created in Stripe
-const XPAY_UPSTREAM_HEADER = "X-Ground-Truth-Xpay-Secret";
+
+// --- Paid tier: $9/mo, includes all paid tools ---
+const PAID_MONTHLY_LIMIT = 5000;
+const PAID_PLAN_PRICE_USD = 9;
+const MONTHLY_PRICE_STR = "$9/mo";
+const CHECKOUT_URL = "https://ground-truth-mcp.anishdasmail.workers.dev/api/checkout?plan=paid";
+
+// 7 paid tools unlocked by a single $9/mo subscription
+const PAID_TOOLS = [
+  "check_pricing",
+  "estimate_market", 
+  "compare_competitors",
+  "compare_pricing_pages",
+  "test_hypothesis",
+  "assess_compliance_posture",
+  "verify_claim",
+] as const;
+
+const MONITOR_TOOLS = ["create_monitor", "list_monitors", "run_monitor_now", "get_monitor_result", "delete_monitor", "generate_change_report"] as const;
 const PUBLIC_APP_ORIGIN = "https://ground-truth-mcp.anishdasmail.workers.dev";
 const SERVER_CARD_ICON_PATH = "/icon.svg";
 const SERVER_CARD_DESCRIPTION =
-  "🎯 ACTIVATION TEST: Paste 'Use check_endpoint with url=https://example.com' - works instantly, no signup. " +
-  "Primary activation signal for AI agents before paid verification tools. Success = your MCP connection works perfectly.";
+  "Free first MCP call: run check_endpoint with url=https://example.com. " +
+  "Paid plans add saved monitors, scheduled checks, evidence history, and change reports. " +
+  "Cloudflare Monetization Gateway with x402 stablecoin payments available.";
+
+// Cloudflare Monetization Gateway with x402 Stablecoin Payments
+const X402_PAYMENT_ENABLED = workerProcess?.env?.GROUND_TRUTH_X402_ENABLED !== "false";
+const X402_NETWORK_CONFIG = workerProcess?.env?.GROUND_TRUTH_X402_NETWORK ?? "base-sepolia";
+const X402_RECIPIENT_CONFIG = workerProcess?.env?.GROUND_TRUTH_X402_RECIPIENT ?? "0xB04BD750b67e7b00c95eAC8995eb9F8441309196";
+const X402_FACILITATOR_URL_CONFIG = workerProcess?.env?.GROUND_TRUTH_X402_FACILITATOR_URL ?? 
+  (X402_NETWORK_CONFIG === "base" ? "https://api.cdp.coinbase.com/platform/v2/x402" : "https://x402.org/facilitator");
+
+// Normalize network to CAIP-2 format
+function normalizeX402Network(network: string): `${string}:${string}` {
+  switch (network) {
+    case "base-sepolia":
+      return "eip155:84532";
+    case "base":
+      return "eip155:8453";
+    case "ethereum":
+      return "eip155:1";
+    case "sepolia":
+      return "eip155:11155111";
+    default:
+      return network as `${string}:${string}`;
+  }
+}
+
+// Per-tool x402 pricing in USD for Cloudflare Monetization Gateway
+const X402_TOOL_PRICES_USD = {
+  check_pricing: 0.01,
+  verify_claim: 0.01,
+  estimate_market: 0.01,
+  compare_competitors: 0.025,
+  compare_pricing_pages: 0.035,
+  test_hypothesis: 0.05,
+  assess_compliance_posture: 0.06,
+} as const;
+
+// Cloudflare Monetization Gateway x402 Resource Server
+let x402ResourceServer: X402ResourceServer | null = null;
+
+if (X402_PAYMENT_ENABLED) {
+  const normalizedNetwork = normalizeX402Network(X402_NETWORK_CONFIG);
+  x402ResourceServer = new X402ResourceServer(
+    new HTTPFacilitatorClient({ url: X402_FACILITATOR_URL_CONFIG }),
+  );
+  registerExactEvmScheme(x402ResourceServer);
+}
+
+// Use imported types from @x402/core/server
+
+const x402RequirementsCache = new Map<string, Promise<X402PaymentRequirements[]>>();
 const REPUTABLE_CRAWLER_USER_AGENTS = [
   "OAI-SearchBot",
   "GPTBot",
@@ -63,77 +128,6 @@ const REPUTABLE_CRAWLER_USER_AGENTS = [
   "CCBot",
 ] as const;
 
-// Per-tool XPay pricing optimized for conversion and usage patterns
-// Lower prices for high-frequency verification tools, higher for complex analysis
-const AGENTIC_TOOL_PRICES_USD = {
-  // High-frequency verification tools - optimized for first-call conversion
-  check_pricing: 0.01,             // Most popular - reduced from 0.015 for conversion
-  verify_claim: 0.01,             // Core verification - kept competitive
-  estimate_market: 0.01,           // Market checks - competitive pricing
-  
-  // Mid-tier analysis tools - balanced pricing
-  compare_competitors: 0.025,      // Package comparison - slight increase for value
-  compare_pricing_pages: 0.035,    // Multi-page comparison - increased for complexity
-  
-  // Advanced analysis tools - premium pricing for specialized use
-  test_hypothesis: 0.05,          // Complex multi-step test - increased for sophistication
-  assess_compliance_posture: 0.06, // Enterprise compliance scan - premium for B2B value
-} as const;
-
-const PAID_TOOLS = Object.keys(AGENTIC_TOOL_PRICES_USD);
-const MONITOR_TOOLS = ["create_monitor", "list_monitors", "run_monitor_now", "get_monitor_result", "delete_monitor", "generate_change_report"] as const;
-const DEFAULT_X402_RECIPIENT = "0xB04BD750b67e7b00c95eAC8995eb9F8441309196";
-const DEFAULT_X402_TESTNET_FACILITATOR_URL = "https://x402.org/facilitator";
-const DEFAULT_X402_MAINNET_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402";
-
-function normalizeX402Network(network: string): string {
-  switch (network) {
-    case "base-sepolia":
-      return "eip155:84532";
-    case "base":
-      return "eip155:8453";
-    case "ethereum":
-      return "eip155:1";
-    case "sepolia":
-      return "eip155:11155111";
-    default:
-      return network;
-  }
-}
-
-function getDefaultFacilitatorUrl(network: string): string {
-  return network === "eip155:8453"
-    ? DEFAULT_X402_MAINNET_FACILITATOR_URL
-    : DEFAULT_X402_TESTNET_FACILITATOR_URL;
-}
-
-const X402_PAYMENT_ENABLED = workerProcess?.env?.GROUND_TRUTH_AGENTIC_PAYMENTS !== "false";
-const DEPLOYMENT_MODE = workerProcess?.env?.GROUND_TRUTH_DEPLOYMENT_MODE ?? "primary";
-const IS_XPAY_UPSTREAM = DEPLOYMENT_MODE === "xpay_upstream";
-const XPAY_UPSTREAM_SECRET = workerProcess?.env?.GROUND_TRUTH_XPAY_UPSTREAM_SECRET?.trim();
-const XPAY_UPSTREAM_PATH_SECRET = workerProcess?.env?.GROUND_TRUTH_XPAY_UPSTREAM_PATH_SECRET?.trim();
-const X402_NETWORK = normalizeX402Network(
-  workerProcess?.env?.GROUND_TRUTH_X402_NETWORK ??
-    workerProcess?.env?.X402_NETWORK ??
-    "base-sepolia",
-) as `${string}:${string}`;
-const X402_RECIPIENT = (workerProcess?.env?.GROUND_TRUTH_X402_RECIPIENT ??
-  workerProcess?.env?.X402_RECIPIENT ??
-  DEFAULT_X402_RECIPIENT) as `0x${string}`;
-const X402_FACILITATOR_URL = workerProcess?.env?.GROUND_TRUTH_X402_FACILITATOR_URL ??
-  workerProcess?.env?.X402_FACILITATOR_URL ??
-  getDefaultFacilitatorUrl(X402_NETWORK);
-
-const x402PaymentServer = (() => {
-  const resourceServer = new x402ResourceServer(
-    new HTTPFacilitatorClient({ url: X402_FACILITATOR_URL }),
-  );
-  registerExactEvmScheme(resourceServer);
-  return resourceServer;
-})();
-
-let x402InitializedPromise: Promise<void> | null = null;
-const x402RequirementsCache = new Map<string, Promise<PaymentRequirements[]>>();
 const SERVER_CARD_READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -143,10 +137,10 @@ const SERVER_CARD_READ_ONLY_ANNOTATIONS = {
 const SERVER_CARD_TOOLS = [
   {
     name: "check_endpoint",
-    title: "🎯 Activation Test - Call This First",
+    title: "Activation Test - Call This First",
     description:
-      "PRIMARY ACTIVATION SIGNAL: Use url=https://example.com to test if your MCP connection works. " +
-      "Zero signup/API key required. Success = connection perfect, ready for paid tools. " +
+      "Primary activation signal: use url=https://example.com to test whether your MCP connection works. " +
+      "No signup or API key is required for this first call. Success means the connection is ready for paid tools. " +
       "Performs one live fetch and returns status, content type, timing, auth signals, and response sample.",
     inputSchema: {
       type: "object",
@@ -925,43 +919,6 @@ const SERVER_CARD_TOOLS = [
   },
 ];
 
-function ensureX402Initialized(): Promise<void> {
-  if (!x402InitializedPromise) {
-    x402InitializedPromise = x402PaymentServer.initialize().catch((error) => {
-      x402InitializedPromise = null;
-      throw error;
-    });
-  }
-
-  return x402InitializedPromise;
-}
-
-async function getX402PaymentRequirements(toolName: string): Promise<PaymentRequirements[]> {
-  const cached = x402RequirementsCache.get(toolName);
-  if (cached) return await cached;
-
-  const priceUSD = AGENTIC_TOOL_PRICES_USD[toolName as keyof typeof AGENTIC_TOOL_PRICES_USD];
-  const requirementsPromise = (async () => {
-    await ensureX402Initialized();
-    return await x402PaymentServer.buildPaymentRequirements({
-      scheme: "exact",
-      payTo: X402_RECIPIENT,
-      price: priceUSD,
-      network: X402_NETWORK,
-      maxTimeoutSeconds: 300,
-    });
-  })();
-
-  x402RequirementsCache.set(toolName, requirementsPromise);
-
-  try {
-    return await requirementsPromise;
-  } catch (error) {
-    x402RequirementsCache.delete(toolName);
-    throw error;
-  }
-}
-
 type ApiKeyRecord = Record<string, unknown> & {
   active?: boolean;
   billingActive?: boolean;
@@ -982,6 +939,15 @@ interface UsageRecord {
   total: number;
   byTool: Record<string, number>;
   updatedAt: string;
+}
+
+interface TrafficLogRecord {
+  kind: string;
+  path: string;
+  source: string;
+  referrer: string | null;
+  userAgent: string | null;
+  ts: number;
 }
 
 interface UsageLimitResult {
@@ -1048,6 +1014,8 @@ interface McpToolCallBody {
   method?: string;
   params?: {
     name?: string;
+    _meta?: Record<string, unknown>;
+    [key: string]: unknown;
   };
 }
 
@@ -1074,7 +1042,7 @@ function textResponse(body: string, init: ResponseInit = {}): Response {
 }
 
 function getPublicOriginForRequest(url: URL): string {
-  return IS_XPAY_UPSTREAM ? PUBLIC_APP_ORIGIN : url.origin;
+  return url.origin;
 }
 
 function getSitemapUrl(url: URL): string {
@@ -1106,7 +1074,7 @@ Sitemap: ${getSitemapUrl(url)}
 ## Primary Pages
 
 - [Home](${publicOrigin}/): Overview, pricing summary, MCP setup, and example verification workflows.
-- [Pricing](${publicOrigin}/pricing): Free checks, agentic pay-per-use, and team plan details.
+- [Pricing](${publicOrigin}/pricing): Free checks, paid monitors, and team plan details.
 - [MCP Server Card](${publicOrigin}/.well-known/mcp/server-card.json): Machine-readable tool metadata.
 `;
 }
@@ -1164,92 +1132,6 @@ function getExtraHeader(
   }
 
   return undefined;
-}
-
-function getX402PaymentToken(extra: unknown): string | undefined {
-  const metaToken = (extra as { _meta?: Record<string, unknown> } | undefined)?._meta?.["x402/payment"];
-  if (typeof metaToken === "string" && metaToken.trim()) return metaToken.trim();
-
-  return getExtraHeader(extra, "PAYMENT-SIGNATURE") ?? getExtraHeader(extra, "X-PAYMENT");
-}
-
-function hasTrustedXpaySecret(secret: string | null | undefined): boolean {
-  return IS_XPAY_UPSTREAM &&
-    typeof XPAY_UPSTREAM_SECRET === "string" &&
-    XPAY_UPSTREAM_SECRET.length > 0 &&
-    typeof secret === "string" &&
-    secret === XPAY_UPSTREAM_SECRET;
-}
-
-function getBearerToken(value: string | null | undefined): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const match = value.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim();
-}
-
-function isTrustedXpayRequest(request: Request): boolean {
-  return hasTrustedXpaySecret(request.headers.get(XPAY_UPSTREAM_HEADER)?.trim()) ||
-    hasTrustedXpaySecret(getBearerToken(request.headers.get("Authorization")));
-}
-
-function isTrustedXpayExtra(extra: unknown): boolean {
-  return hasTrustedXpaySecret(getExtraHeader(extra, XPAY_UPSTREAM_HEADER)) ||
-    hasTrustedXpaySecret(getBearerToken(getExtraHeader(extra, "Authorization")));
-}
-
-function hasTrustedXpayPath(url: URL): boolean {
-  if (
-    !IS_XPAY_UPSTREAM ||
-    typeof XPAY_UPSTREAM_PATH_SECRET !== "string" ||
-    XPAY_UPSTREAM_PATH_SECRET.length === 0
-  ) {
-    return false;
-  }
-
-  return url.pathname === `/mcp/${XPAY_UPSTREAM_PATH_SECRET}` ||
-    url.pathname === `/mcp-xpay-${XPAY_UPSTREAM_PATH_SECRET}`;
-}
-
-function hasTrustedXpayQuery(url: URL): boolean {
-  return IS_XPAY_UPSTREAM &&
-    typeof XPAY_UPSTREAM_PATH_SECRET === "string" &&
-    XPAY_UPSTREAM_PATH_SECRET.length > 0 &&
-    url.searchParams.get("xpay_secret") === XPAY_UPSTREAM_PATH_SECRET;
-}
-
-function isPublicXpayDiscoveryMethod(method: string | null): boolean {
-  return method === "initialize" ||
-    method === "notifications/initialized" ||
-    method === "tools/list";
-}
-
-function buildX402PaymentRequiredResult(
-  toolName: string,
-  description: string,
-  requirements: PaymentRequirements[],
-  reason = "PAYMENT_REQUIRED",
-  extraFields: Record<string, unknown> = {},
-) {
-  const payload = {
-    x402Version: 2,
-    error: reason,
-    resource: {
-      url: `x402://${toolName}`,
-      description,
-      mimeType: "application/json",
-    },
-    accepts: requirements,
-    ...extraFields,
-  };
-
-  return {
-    isError: true,
-    _meta: { "x402/error": payload },
-    content: [{
-      type: "text" as const,
-      text: JSON.stringify(payload),
-    }],
-  };
 }
 
 function extractPricingSignals(body: string) {
@@ -1318,6 +1200,120 @@ function getSecurityHeaderSummary(headers: Headers) {
     score,
   };
 }
+
+// --- Cloudflare Monetization Gateway x402 Helper Functions ---
+
+/**
+ * Get x402 payment requirements for a specific tool
+ */
+async function getX402PaymentRequirements(toolName: string): Promise<X402PaymentRequirements[]> {
+  const normalizedNetwork = normalizeX402Network(X402_NETWORK_CONFIG);
+  const priceUSD = X402_TOOL_PRICES_USD[toolName as keyof typeof X402_TOOL_PRICES_USD];
+  
+  if (!priceUSD || !x402ResourceServer) {
+    return [];
+  }
+  
+  // Convert USD to atomic units (USDC has 6 decimals)
+  // For testnet, we'll use a small amount; for mainnet, actual pricing
+  const isTestnet = normalizedNetwork === "eip155:84532"; // base-sepolia
+  const amountInAtomicUnits = isTestnet 
+    ? "100" // 0.0001 USDC for testing
+    : String(Math.round(priceUSD * 1_000_000)); // Convert USD to USDC atomic units (6 decimals)
+  
+  const asset = isTestnet ? "0x0c9e55395b598813254324832f30322987287449" : "0xA0b86a33E6441b8b24c7e86e32B19C5D82cdDB2c"; // USDC addresses
+  
+  return [
+    {
+      scheme: "eip155:eip3009",
+      network: normalizedNetwork,
+      asset: asset,
+      amount: amountInAtomicUnits,
+      payTo: X402_RECIPIENT_CONFIG,
+      maxTimeoutSeconds: 60,
+      extra: {
+        facilitatorUrl: X402_FACILITATOR_URL_CONFIG,
+      },
+    }
+  ];
+}
+
+/**
+ * Check if x402 payment is provided and valid
+ */
+async function checkX402Payment(
+  toolName: string, 
+  meta: Record<string, unknown> | undefined,
+  env: Env
+): Promise<{ valid: boolean; error?: unknown }> {
+  if (!X402_PAYMENT_ENABLED || !x402ResourceServer) {
+    return { valid: false };
+  }
+  
+  const paymentToken = meta?.["x402/payment"] as string | undefined;
+  if (!paymentToken) {
+    return { valid: false };
+  }
+  
+  try {
+    const paymentRequirements = await getX402PaymentRequirements(toolName);
+    if (paymentRequirements.length === 0) {
+      return { valid: false };
+    }
+    
+    // Parse the base64-encoded payment payload
+    let paymentPayload: X402PaymentPayload;
+    try {
+      const decoded = JSON.parse(atob(paymentToken));
+      paymentPayload = decoded as X402PaymentPayload;
+    } catch (e) {
+      console.error("Failed to decode x402 payment token:", e);
+      return { valid: false, error: "Invalid payment token format" };
+    }
+    
+    // Validate the payment payload using the x402 server
+    const validation = await x402ResourceServer.verifyPayment(
+      paymentPayload,
+      paymentRequirements[0] // Use first requirement
+    );
+    
+    if (validation.isValid) {
+      return { valid: true };
+    } else {
+      return { 
+        valid: false, 
+        error: validation.invalidMessage || validation.invalidReason || "Payment verification failed"
+      };
+    }
+  } catch (error) {
+    console.error("x402 payment validation error:", error);
+    return { valid: false, error };
+  }
+}
+
+/**
+ * Get x402 metadata for tool responses
+ */
+function getX402Metadata(toolName: string): Record<string, unknown> {
+  const priceUSD = X402_TOOL_PRICES_USD[toolName as keyof typeof X402_TOOL_PRICES_USD];
+  const normalizedNetwork = normalizeX402Network(X402_NETWORK_CONFIG);
+  
+  if (!priceUSD || !X402_PAYMENT_ENABLED) {
+    return {};
+  }
+  
+  return {
+    "agents-x402/paymentRequired": true,
+    "agents-x402/priceUSD": priceUSD,
+    "agents-x402/network": normalizedNetwork,
+    "agents-x402/asset": normalizedNetwork === "eip155:84532" ? "Test USDC" : "USDC",
+    "agents-x402/priceAmount": priceUSD,
+    "agents-x402/priceCurrency": "USD",
+    "agents-x402/payTo": X402_RECIPIENT_CONFIG,
+  };
+}
+
+// --- Error handling functions ---
 
 function getJsonRpcErrorCode(status: number): number {
   switch (status) {
@@ -1415,11 +1411,24 @@ function isBillingActive(record: ApiKeyRecord): boolean {
 }
 
 function getProQuota(record: ApiKeyRecord): number {
-  return typeof record.monthlyQuota === "number" ? record.monthlyQuota : PRO_MONTHLY_LIMIT;
+  return typeof record.monthlyQuota === "number" ? record.monthlyQuota : PAID_MONTHLY_LIMIT;
 }
 
 function getUsageStorageKey(subjectType: "free" | "free_verify_claim" | "pro", month: string, subjectId: string): string {
   return `usage:${subjectType}:${month}:${subjectId}`;
+}
+
+function inferTrafficSource(request: Request): string {
+  const referrer = request.headers.get("referer") ?? request.headers.get("referrer") ?? "";
+  const userAgent = request.headers.get("user-agent") ?? "";
+  const composite = `${referrer} ${userAgent}`.toLowerCase();
+
+  if (composite.includes("glama.ai")) return "glama";
+  if (composite.includes("smithery.ai")) return "smithery";
+  if (composite.includes("xpay")) return "xpay";
+  if (composite.includes("localhost") || composite.includes("127.0.0.1") || composite.includes("wrangler")) return "local";
+  if (!referrer) return "direct";
+  return "referral";
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -1618,9 +1627,9 @@ async function requireProAccess(
     return jsonError(
       429,
       "quota_exceeded",
-      `Team monthly quota exceeded for ${month}.`,
+      `Monthly quota exceeded for ${month}. You have used ${usage.used} of ${limit} included calls.`,
       {
-        tier: "team",
+        tier: "paid",
         tool: toolName,
         month,
         limit,
@@ -1721,32 +1730,6 @@ async function cachedFetch(sql: SqlTagFn, url: string): Promise<{ body: string; 
   const body = await resp.text();
   if (resp.ok) cacheSet(sql, url, body);
   return { body, fromCache: false };
-}
-
-function paidResultCacheGet(sql: SqlTagFn, key: string): Record<string, unknown> | null {
-  const rows = sql<{ response: string; ts: number }>`SELECT response, ts FROM paid_result_cache WHERE key = ${key}`;
-  if (rows.length === 0) return null;
-
-  const row = rows[0];
-  if (Date.now() - row.ts > PAID_RESULT_CACHE_TTL_MS) {
-    sql`DELETE FROM paid_result_cache WHERE key = ${key}`;
-    return null;
-  }
-
-  try {
-    return JSON.parse(row.response) as Record<string, unknown>;
-  } catch {
-    sql`DELETE FROM paid_result_cache WHERE key = ${key}`;
-    return null;
-  }
-}
-
-function paidResultCacheSet(sql: SqlTagFn, key: string, response: Record<string, unknown>): void {
-  try {
-    sql`INSERT OR REPLACE INTO paid_result_cache (key, response, ts) VALUES (${key}, ${JSON.stringify(response)}, ${Date.now()})`;
-  } catch {
-    // Paid result caching should never block a tool response.
-  }
 }
 
 // --- Monitor helpers ---
@@ -1961,7 +1944,9 @@ export class GroundTruthMCP extends McpAgent<Env> {
     this.sql`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, data TEXT, ts INTEGER)`;
     // Initialize usage log table
     this.sql`CREATE TABLE IF NOT EXISTS usage_log (id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT, ts INTEGER, success INTEGER)`;
-    // Initialize paid-response cache for idempotent x402 retries
+    // Initialize traffic log table for source-aware funnel analysis
+    this.sql`CREATE TABLE IF NOT EXISTS traffic_log (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, path TEXT, source TEXT, referrer TEXT, user_agent TEXT, ts INTEGER)`;
+    // Initialize paid-response cache for idempotent paid-tool retries
     this.sql`CREATE TABLE IF NOT EXISTS paid_result_cache (key TEXT PRIMARY KEY, response TEXT, ts INTEGER)`;
     // Initialize monitor tables
     this.sql`CREATE TABLE IF NOT EXISTS monitors (id TEXT PRIMARY KEY, owner_key_hash TEXT NOT NULL, name TEXT NOT NULL, target_type TEXT NOT NULL, target_value TEXT NOT NULL, instructions TEXT, schedule TEXT NOT NULL DEFAULT 'manual', notification_destination TEXT, last_run_at INTEGER, last_run_status TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1)`;
@@ -1984,147 +1969,28 @@ export class GroundTruthMCP extends McpAgent<Env> {
       openWorldHint: true,
     } as const;
 
-    const toolServer = this.server as McpServer;
-    const registerPaidTool = (
-      name: string,
-      priceUSD: number,
-      config: Record<string, unknown>,
-      execute: (args: any, extra: unknown) => Promise<Record<string, unknown>>,
-    ) =>
-      (toolServer as unknown as {
-        registerTool: (toolName: string, toolConfig: Record<string, unknown>, callback: (args: any, extra: unknown) => Promise<Record<string, unknown>>) => unknown;
-      }).registerTool(
-        name,
-        {
-          ...config,
-          _meta: IS_XPAY_UPSTREAM
-            ? ((config as { _meta?: Record<string, unknown> })._meta ?? {})
-            : {
-              ...((config as { _meta?: Record<string, unknown> })._meta ?? {}),
-              "agents-x402/paymentRequired": true,
-              "agents-x402/priceUSD": priceUSD,
-            },
+    const registerPaidTool = this.server.registerTool.bind(this.server);
+    
+    // Helper to add x402 metadata to paid tools when Monetization Gateway is enabled
+    function getPaidToolMetadata(toolName: string): Record<string, unknown> {
+      if (!X402_PAYMENT_ENABLED) return {};
+      
+      const priceUSD = X402_TOOL_PRICES_USD[toolName as keyof typeof X402_TOOL_PRICES_USD];
+      const normalizedNetwork = normalizeX402Network(X402_NETWORK_CONFIG);
+      
+      if (!priceUSD) return {};
+      
+      return {
+        _meta: {
+          "agents-x402/paymentRequired": true,
+          "agents-x402/priceUSD": priceUSD,
+          "agents-x402/network": normalizedNetwork,
+          "agents-x402/asset": normalizedNetwork === "eip155:84532" ? "Test USDC" : "USDC",
+          "agents-x402/payTo": X402_RECIPIENT_CONFIG,
+          "agents-x402/priceCurrency": "USD",
         },
-        async (args, extra) => {
-          if (isTrustedXpayExtra(extra)) {
-            return await execute(args, extra);
-          }
-
-          const teamApiKey = getExtraHeader(extra, "X-API-Key");
-          if (teamApiKey) {
-            return await execute(args, extra);
-          }
-
-          if (!X402_PAYMENT_ENABLED) {
-            return {
-              isError: true,
-              content: [{
-                type: "text" as const,
-                text: JSON.stringify({
-                  error: "payment_disabled",
-                  message: "Agentic pay-per-use is disabled on this deployment. Use a team API key instead.",
-                }),
-              }],
-            };
-          }
-
-          let requirements: PaymentRequirements[];
-          try {
-            requirements = await getX402PaymentRequirements(name);
-          } catch {
-            return {
-              isError: true,
-              content: [{
-                type: "text" as const,
-                text: JSON.stringify({
-                  error: "payment_setup_failed",
-                  message: "Unable to compute x402 payment requirements for this tool.",
-                }),
-              }],
-            };
-          }
-
-          const description = typeof config.description === "string" ? config.description : name;
-          const paymentToken = getX402PaymentToken(extra);
-          if (!paymentToken) {
-            return buildX402PaymentRequiredResult(name, description, requirements);
-          }
-
-          const paidResultCacheKey = await sha256Hex(`x402:${name}:${paymentToken}`);
-          const cachedPaidResult = paidResultCacheGet(sql, paidResultCacheKey);
-          if (cachedPaidResult) {
-            return cachedPaidResult;
-          }
-
-          let paymentPayload: Record<string, unknown>;
-          try {
-            paymentPayload = JSON.parse(atob(paymentToken)) as Record<string, unknown>;
-          } catch {
-            return buildX402PaymentRequiredResult(name, description, requirements, "INVALID_PAYMENT");
-          }
-
-          const matchingRequirements = x402PaymentServer.findMatchingRequirements(requirements, paymentPayload as any);
-          if (!matchingRequirements) {
-            return buildX402PaymentRequiredResult(name, description, requirements, "INVALID_PAYMENT");
-          }
-
-          try {
-            const verification = await x402PaymentServer.verifyPayment(paymentPayload as any, matchingRequirements);
-            if (!verification.isValid) {
-              return buildX402PaymentRequiredResult(
-                name,
-                description,
-                requirements,
-                verification.invalidReason ?? "INVALID_PAYMENT",
-                verification.payer ? { payer: verification.payer } : {},
-              );
-            }
-          } catch {
-            return buildX402PaymentRequiredResult(name, description, requirements, "INVALID_PAYMENT");
-          }
-
-          let result: Record<string, unknown>;
-          try {
-            result = await execute(args, extra);
-          } catch (error) {
-            result = {
-              isError: true,
-              content: [{
-                type: "text" as const,
-                text: `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`,
-              }],
-            };
-          }
-
-          if (result.isError === true) {
-            return result;
-          }
-
-          try {
-            const settlement = await x402PaymentServer.settlePayment(paymentPayload as any, matchingRequirements);
-            if (!settlement.success) {
-              return buildX402PaymentRequiredResult(name, description, requirements, settlement.errorReason ?? "SETTLEMENT_FAILED");
-            }
-
-            const enrichedResult = {
-              ...result,
-              _meta: {
-                ...((result._meta as Record<string, unknown> | undefined) ?? {}),
-                "x402/payment-response": {
-                  success: true,
-                  transaction: settlement.transaction,
-                  network: settlement.network,
-                  payer: settlement.payer,
-                },
-              },
-            };
-            paidResultCacheSet(sql, paidResultCacheKey, enrichedResult);
-            return enrichedResult;
-          } catch {
-            return buildX402PaymentRequiredResult(name, description, requirements, "SETTLEMENT_FAILED");
-          }
-        },
-      );
+      };
+    }
 
     // ───────────────────────────────────────────────
     // FREE: check_endpoint
@@ -2232,7 +2098,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     registerPaidTool(
       "estimate_market",
-      AGENTIC_TOOL_PRICES_USD.estimate_market,
       {
         title: "Package Market Search",
         description:
@@ -2278,6 +2143,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           ),
         },
         annotations: readOnlyNetworkToolAnnotations,
+        ...getPaidToolMetadata("estimate_market"),
       },
       async ({ query, registry }) => {
         if (registry === "npm") {
@@ -2326,7 +2192,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     registerPaidTool(
       "check_pricing",
-      AGENTIC_TOOL_PRICES_USD.check_pricing,
       {
         title: "Pricing Page Scan",
         description:
@@ -2371,6 +2236,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           ).optional(),
         },
         annotations: readOnlyNetworkToolAnnotations,
+        ...getPaidToolMetadata("check_pricing"),
       },
       async ({ url }) => {
         try {
@@ -2534,7 +2400,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     registerPaidTool(
       "compare_pricing_pages",
-      AGENTIC_TOOL_PRICES_USD.compare_pricing_pages,
       {
         title: "Pricing Page Comparison",
         description:
@@ -2605,6 +2470,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           ),
         },
         annotations: readOnlyNetworkToolAnnotations,
+        ...getPaidToolMetadata("compare_pricing_pages"),
       },
       async ({ pages }) => {
         const results = [];
@@ -2649,7 +2515,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     registerPaidTool(
       "compare_competitors",
-      AGENTIC_TOOL_PRICES_USD.compare_competitors,
       {
         title: "Named Package Comparison",
         description:
@@ -2719,6 +2584,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           ),
         },
         annotations: readOnlyNetworkToolAnnotations,
+        ...getPaidToolMetadata("compare_competitors"),
       },
       async ({ packages, registry }) => {
         const comparisons = [];
@@ -2776,7 +2642,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     registerPaidTool(
       "verify_claim",
-      AGENTIC_TOOL_PRICES_USD.verify_claim,
       {
         title: "Claim Support Check",
         description:
@@ -2852,6 +2717,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           ),
         },
         annotations: readOnlyNetworkToolAnnotations,
+        ...getPaidToolMetadata("verify_claim"),
       },
       async ({ claim, evidence_urls, keywords }) => {
         const sources = [];
@@ -2901,7 +2767,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     registerPaidTool(
       "assess_compliance_posture",
-      AGENTIC_TOOL_PRICES_USD.assess_compliance_posture,
       {
         title: "Compliance Signal Scan",
         description:
@@ -2967,6 +2832,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           ),
         },
         annotations: readOnlyNetworkToolAnnotations,
+        ...getPaidToolMetadata("assess_compliance_posture"),
       },
       async ({ url }) => {
         try {
@@ -2995,7 +2861,6 @@ export class GroundTruthMCP extends McpAgent<Env> {
     // ───────────────────────────────────────────────
     registerPaidTool(
       "test_hypothesis",
-      AGENTIC_TOOL_PRICES_USD.test_hypothesis,
       {
         title: "Multi-step Hypothesis Test",
         description:
@@ -3108,6 +2973,7 @@ export class GroundTruthMCP extends McpAgent<Env> {
           ),
         },
         annotations: readOnlyNetworkToolAnnotations,
+        ...getPaidToolMetadata("test_hypothesis"),
       },
       async ({ hypothesis, tests }) => {
         const results = [];
@@ -3588,7 +3454,37 @@ export class GroundTruthMCP extends McpAgent<Env> {
     if (url.hostname === "internal" && url.pathname === "/run-due-monitors" && request.method === "POST") {
       return this.handleRunDueMonitors();
     }
+    if (url.hostname === "internal" && url.pathname === "/track-traffic" && request.method === "POST") {
+      return this.handleTrackTraffic(request);
+    }
+    if (url.hostname === "internal" && url.pathname === "/stats") {
+      return this.handleStats();
+    }
     return super.fetch(request);
+  }
+
+  async handleTrackTraffic(request: Request): Promise<Response> {
+    const sql = this.sql.bind(this) as SqlTagFn;
+    try {
+      const payload = (await request.json().catch(() => null)) as Partial<TrafficLogRecord> | null;
+      const kind = typeof payload?.kind === "string" && payload.kind.trim() ? payload.kind.trim() : "unknown";
+      const path = typeof payload?.path === "string" && payload.path.trim() ? payload.path.trim() : "/";
+      const source = typeof payload?.source === "string" && payload.source.trim() ? payload.source.trim() : "direct";
+      const referrer = typeof payload?.referrer === "string" && payload.referrer.trim() ? payload.referrer.trim() : null;
+      const userAgent = typeof payload?.userAgent === "string" && payload.userAgent.trim() ? payload.userAgent.trim() : null;
+      const ts = typeof payload?.ts === "number" ? payload.ts : Date.now();
+
+      sql`INSERT INTO traffic_log (kind, path, source, referrer, user_agent, ts) VALUES (${kind}, ${path}, ${source}, ${referrer}, ${userAgent}, ${ts})`;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
   }
 
   async handleRunDueMonitors(): Promise<Response> {
@@ -3632,15 +3528,94 @@ export class GroundTruthMCP extends McpAgent<Env> {
       });
     }
   }
+
+  async handleStats(): Promise<Response> {
+    const sql = this.sql.bind(this) as SqlTagFn;
+    try {
+      this.sql`CREATE TABLE IF NOT EXISTS usage_log (id INTEGER PRIMARY KEY AUTOINCREMENT, tool TEXT, ts INTEGER, success INTEGER)`;
+      this.sql`CREATE TABLE IF NOT EXISTS traffic_log (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, path TEXT, source TEXT, referrer TEXT, user_agent TEXT, ts INTEGER)`;
+
+      // Count total tool usage from usage_log
+      const totalUsage = sql<{ count: number }>`SELECT COUNT(*) as count FROM usage_log`;
+      const totalCount = totalUsage[0]?.count ?? 0;
+
+      // Count usage by tool
+      const byTool = sql<{ tool: string; count: number }>`SELECT tool, COUNT(*) as count FROM usage_log WHERE tool IS NOT NULL GROUP BY tool`;
+      const bySource = sql<{ source: string; count: number }>`SELECT source, COUNT(*) as count FROM traffic_log WHERE source IS NOT NULL GROUP BY source`;
+      const byKind = sql<{ kind: string; count: number }>`SELECT kind, COUNT(*) as count FROM traffic_log WHERE kind IS NOT NULL GROUP BY kind`;
+      const byPath = sql<{ path: string; count: number }>`SELECT path, COUNT(*) as count FROM traffic_log WHERE path IS NOT NULL GROUP BY path ORDER BY count DESC LIMIT 20`;
+
+      const toolBreakdown = byTool.reduce((acc, row) => {
+        acc[row.tool] = row.count;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const sourceBreakdown = bySource.reduce((acc, row) => {
+        acc[row.source] = row.count;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const kindBreakdown = byKind.reduce((acc, row) => {
+        acc[row.kind] = row.count;
+        return acc;
+      }, {} as Record<string, number>);
+
+      // Get free vs pro usage
+      const usageRecords = sql<UsageRecord>`SELECT * FROM usage_log`;
+      const freeUsage = usageRecords.filter(r => r.subjectType === 'free' || r.subjectType === 'free_verify_claim').length;
+      const proUsage = usageRecords.filter(r => r.subjectType === 'pro').length;
+
+      return new Response(JSON.stringify({
+        totalRequests: totalCount,
+        byTool: toolBreakdown,
+        trafficBySource: sourceBreakdown,
+        trafficByKind: kindBreakdown,
+        topPaths: byPath,
+        freeUsage,
+        proUsage,
+        timestamp: new Date().toISOString(),
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
 }
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
     const isPrimaryMcpPath = url.pathname === "/mcp";
-    const isTrustedXpayPathRequest = hasTrustedXpayPath(url);
-    const isTrustedXpayQueryRequest = hasTrustedXpayQuery(url);
-    const servedMcpPath = isTrustedXpayPathRequest ? url.pathname : "/mcp";
+    const queueTrafficLog = (kind: string) => {
+      try {
+        const id = env.MCP_OBJECT.idFromName("ground-truth");
+        const stub = env.MCP_OBJECT.get(id);
+        const payload: TrafficLogRecord = {
+          kind,
+          path: url.pathname,
+          source: inferTrafficSource(request),
+          referrer: request.headers.get("referer"),
+          userAgent: request.headers.get("user-agent"),
+          ts: Date.now(),
+        };
+        ctx.waitUntil(
+          stub.fetch(
+            new Request("https://internal/track-traffic", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            }),
+          ).catch(() => undefined),
+        );
+      } catch {
+        // Traffic logging must never block the request path.
+      }
+    };
 
     if (request.method === "GET" || request.method === "HEAD") {
       if (url.pathname === "/robots.txt") {
@@ -3664,7 +3639,7 @@ export default {
     // ───────────────────────────────────────────────
     // MCP endpoint with billing and usage enforcement
     // ───────────────────────────────────────────────
-    if (isPrimaryMcpPath || isTrustedXpayPathRequest) {
+    if (isPrimaryMcpPath) {
       let body: McpToolCallBody | null = null;
       try {
         body = await request.clone().json() as McpToolCallBody;
@@ -3678,32 +3653,7 @@ export default {
         ? body.params.name
         : null;
 
-      if (IS_XPAY_UPSTREAM) {
-        if (!XPAY_UPSTREAM_SECRET && !XPAY_UPSTREAM_PATH_SECRET) {
-          return jsonError(
-            500,
-            "xpay_upstream_trust_missing",
-            "This xpay upstream deployment is missing its trust configuration.",
-            { header: XPAY_UPSTREAM_HEADER, path: "/mcp/<secret>" },
-            requestId,
-          );
-        }
-
-        const trustedXpayRequest = isTrustedXpayRequest(request) ||
-          isTrustedXpayPathRequest ||
-          isTrustedXpayQueryRequest;
-        if (!trustedXpayRequest && !isPublicXpayDiscoveryMethod(method)) {
-          return jsonError(
-            401,
-            "invalid_xpay_upstream_secret",
-            "This xpay upstream deployment requires a valid shared secret header, path, or query token.",
-            { header: XPAY_UPSTREAM_HEADER, path: "/mcp/<secret>", query: "xpay_secret" },
-            requestId,
-          );
-        }
-
-        return GroundTruthMCP.serve("/mcp").fetch(request, env, ctx);
-      }
+      queueTrafficLog(toolName ? "mcp_tool_call" : "mcp_request");
 
       if (method === "tools/call" && toolName) {
         if (FREE_TOOLS.includes(toolName)) {
@@ -3723,9 +3673,9 @@ export default {
                 return jsonError(
                   429,
                   "quota_exceeded",
-                  `Team monthly quota exceeded for ${month}.`,
+                  `Monthly quota exceeded for ${month}. You have used ${usage.used} of ${limit} included calls.`,
                   {
-                    tier: "team",
+                    tier: "paid",
                     tool: toolName,
                     month,
                     limit,
@@ -3762,7 +3712,7 @@ export default {
                 return jsonError(
                   429,
                   "quota_exceeded",
-                  `Free verify_claim quota exceeded for ${month}. Upgrade to Starter plan for unlimited claim verifications.`,
+                  `Free verify_claim quota exceeded for ${month}. Get unlimited access with the paid plan.`,
                   {
                     tier: "free",
                     tool: toolName,
@@ -3771,8 +3721,8 @@ export default {
                     used: usage.used,
                     remaining: usage.remaining,
                     clientType: freeClient.type,
-                    upgradeUrl: "https://ground-truth-mcp.anishdasmail.workers.dev/pricing",
-                    upgradeMessage: `Starter plan: $${STARTER_PLAN_MONTHLY_PRICE_USD}/month for ${STARTER_MONTHLY_LIMIT} verifications`,
+                    upgradeUrl: CHECKOUT_URL,
+                    upgradeMessage: `${MONTHLY_PRICE_STR}, includes all paid tools and unlimited verify_claim`,
                   },
                   requestId,
                 );
@@ -3821,27 +3771,106 @@ export default {
             return proAccess;
           }
           await incrementUsage(env.API_KEYS, proAccess.usageKey, "pro", proAccess.subjectId, proAccess.month, toolName);
-        } else {
+        } else if ((PAID_TOOLS as readonly string[]).includes(toolName)) {
           const maybeApiKey = request.headers.get("X-API-Key")?.trim();
-          if (maybeApiKey) {
-            const proAccess = await requireProAccess(env.API_KEYS, request, toolName, requestId);
-            if (proAccess instanceof Response) {
-              return proAccess;
+          const meta = body?.params?._meta as Record<string, unknown> | undefined;
+          
+          // First, check for x402 payment (Cloudflare Monetization Gateway)
+          if (X402_PAYMENT_ENABLED && !maybeApiKey) {
+            const x402PaymentCheck = await checkX402Payment(toolName, meta, env);
+            if (x402PaymentCheck.valid) {
+              // x402 payment is valid - allow access via Cloudflare Monetization Gateway
+              // No usage tracking for x402 payments - each payment is a separate transaction
+              const x402Metadata = getX402Metadata(toolName);
+              
+              // Add x402 metadata to the request for tracking
+              ctx.waitUntil(logRemoteUsage(toolName, true, "x402_payment_success", {
+                network: X402_NETWORK_CONFIG,
+                tool: toolName,
+                priceUSD: X402_TOOL_PRICES_USD[toolName as keyof typeof X402_TOOL_PRICES_USD],
+              }));
+              
+              // Return the request with x402 metadata for the MCP server to process
+              const modifiedBody = {
+                ...body,
+                params: {
+                  ...body?.params,
+                  _meta: {
+                    ...meta,
+                    ...x402Metadata,
+                    "x402/settlement": "confirmed",
+                  },
+                },
+              };
+              
+              const modifiedRequest = new Request(request, {
+                method: request.method,
+                headers: request.headers,
+                body: JSON.stringify(modifiedBody),
+              });
+              
+              return GroundTruthMCP.serve("/mcp").fetch(modifiedRequest, env, ctx);
             }
-
-            await incrementUsage(
-              env.API_KEYS,
-              proAccess.usageKey,
-              "pro",
-              proAccess.subjectId,
-              proAccess.month,
-              toolName,
+          }
+          
+          // Fall back to traditional API key approach
+          if (!maybeApiKey) {
+            // Compliance-led wording for assess_compliance_posture, generic for others
+            const isCompliance = toolName === "assess_compliance_posture";
+            const challengeMessage = isCompliance
+              ? `Compliance assessment requires a paid subscription. ${MONTHLY_PRICE_STR}, includes all paid tools.`
+              : `This tool requires a paid subscription. ${MONTHLY_PRICE_STR}, includes all paid tools.`;
+            
+            // If x402 is enabled, also include x402 payment information in the error
+            const x402Metadata = X402_PAYMENT_ENABLED ? getX402Metadata(toolName) : {};
+            
+            return jsonError(
+              402,
+              "payment_required",
+              challengeMessage,
+              {
+                tier: "paid",
+                tool: toolName,
+                upgradeUrl: CHECKOUT_URL,
+                price: MONTHLY_PRICE_STR,
+                includesAllPaidTools: true,
+                ...x402Metadata,
+              },
+              requestId,
             );
           }
+          const proAccess = await requireProAccess(env.API_KEYS, request, toolName, requestId);
+          if (proAccess instanceof Response) {
+            return proAccess;
+          }
+          await incrementUsage(
+            env.API_KEYS,
+            proAccess.usageKey,
+            "pro",
+            proAccess.subjectId,
+            proAccess.month,
+            toolName,
+          );
+        } else if ((MONITOR_TOOLS as readonly string[]).includes(toolName)) {
+          const maybeApiKey = request.headers.get("X-API-Key")?.trim();
+          if (!maybeApiKey) {
+            return jsonError(
+              401,
+              "missing_api_key",
+              `Tool '${toolName}' requires a team API key.`,
+              { tier: "team", tool: toolName },
+              requestId,
+            );
+          }
+          const proAccess = await requireProAccess(env.API_KEYS, request, toolName, requestId);
+          if (proAccess instanceof Response) {
+            return proAccess;
+          }
+          await incrementUsage(env.API_KEYS, proAccess.usageKey, "pro", proAccess.subjectId, proAccess.month, toolName);
         }
       }
 
-      return GroundTruthMCP.serve(servedMcpPath).fetch(request, env, ctx);
+      return GroundTruthMCP.serve("/mcp").fetch(request, env, ctx);
     }
 
     if (url.pathname === SERVER_CARD_ICON_PATH) {
@@ -3865,9 +3894,7 @@ export default {
     }
 
     if (url.pathname === "/.well-known/mcp/server-card.json") {
-      const publicOrigin = IS_XPAY_UPSTREAM
-        ? PUBLIC_APP_ORIGIN
-        : url.origin;
+      const publicOrigin = url.origin;
       const homepage = `${publicOrigin}/`;
       const icon = `${publicOrigin}${SERVER_CARD_ICON_PATH}`;
       return jsonResponse({
@@ -3882,46 +3909,25 @@ export default {
           version: SERVER_VERSION,
         },
         authentication: {
-          required: IS_XPAY_UPSTREAM,
-          schemes: IS_XPAY_UPSTREAM ? ["header"] : ["header", "x402"],
+          required: false,
+          schemes: ["header"],
         },
-        metadata: IS_XPAY_UPSTREAM
-          ? {
-            description: SERVER_CARD_DESCRIPTION,
-            homepage,
-            website: homepage,
-            icon,
-            pricing: `${publicOrigin}/pricing`,
-            freeTools: FREE_TOOLS,
-            upstreamMode: "xpay_proxy",
-            upstreamAuthHeader: XPAY_UPSTREAM_HEADER,
-          }
-          : {
-            description: SERVER_CARD_DESCRIPTION,
-            homepage,
-            website: homepage,
-            icon,
-            pricing: `${publicOrigin}/pricing`,
-            freeTools: FREE_TOOLS,
-            freeVerifyClaimLimit: FREE_VERIFY_CLAIM_LIMIT,
-            starterPlan: {
-              priceUsdMonthly: STARTER_PLAN_MONTHLY_PRICE_USD,
-              quota: STARTER_MONTHLY_LIMIT,
-              header: "X-API-Key",
-            },
-            teamPlan: {
-              priceUsdMonthly: TEAM_PLAN_MONTHLY_PRICE_USD,
-              quota: PRO_MONTHLY_LIMIT,
-              header: "X-API-Key",
-            },
-            agenticPayPerUse: {
-              enabled: X402_PAYMENT_ENABLED,
-              network: X402_NETWORK,
-              facilitator: X402_FACILITATOR_URL,
-              recipient: X402_RECIPIENT,
-              toolPricesUsd: AGENTIC_TOOL_PRICES_USD,
-            },
+        metadata: {
+          description: SERVER_CARD_DESCRIPTION,
+          homepage,
+          website: homepage,
+          icon,
+          pricing: `${publicOrigin}/pricing`,
+          freeTools: FREE_TOOLS,
+          freeVerifyClaimLimit: FREE_VERIFY_CLAIM_LIMIT,
+          paidPlan: {
+            priceUsdMonthly: PAID_PLAN_PRICE_USD,
+            quota: PAID_MONTHLY_LIMIT,
+            header: "X-API-Key",
+            includesAllPaidTools: true,
+            paidTools: PAID_TOOLS,
           },
+        },
         tools: SERVER_CARD_TOOLS,
         resources: [],
         prompts: [],
@@ -3932,6 +3938,7 @@ export default {
     // Pricing page
     // ───────────────────────────────────────────────
     if (url.pathname === "/pricing") {
+      queueTrafficLog("pricing_page");
       return new Response(
         `<!DOCTYPE html>
 <html lang="en">
@@ -3939,7 +3946,7 @@ export default {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth - Pricing</title>
-  <meta name="description" content="🎯 ACTIVATION TEST: Paste this exact prompt - 'Use check_endpoint with url=https://example.com' - works instantly, no signup. Primary activation signal for AI agents.">
+  <meta name="description" content="Free first MCP call: run check_endpoint with url=https://example.com. Paid plans add saved monitors, scheduled checks, evidence history, and change reports.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -4090,68 +4097,28 @@ export default {
         <a href="/#quickstart" class="btn btn-outline">Try Free Checks</a>
       </div>
 
-      <div class="plan">
-        <h2>Starter</h2>
-        <div class="price">$${STARTER_PLAN_MONTHLY_PRICE_USD}<span>/month</span></div>
-        <p class="desc">For individual agent builders who need saved monitors, evidence history, and predictable monthly usage.</p>
-        <ul>
-          <li>Requires <strong>X-API-Key</strong></li>
-          <li>Billing must be active</li>
-          <li>${STARTER_MONTHLY_LIMIT.toLocaleString()} requests per calendar month</li>
-          <li>Usage tracked per API key</li>
-          <li>Includes all verification tools: pricing, compliance, market, competitor, hypothesis</li>
-          <li>Create and run saved monitors with evidence history</li>
-          <li>Unlimited <strong>verify_claim</strong> calls</li>
-        </ul>
-        <form action="/api/checkout?plan=starter" method="POST">
-          <button type="submit" class="btn btn-primary">Subscribe Starter Plan</button>
-        </form>
-      </div>
-
       <div class="plan plan-pro">
-        <h2>Agentic</h2>
-        <div class="price">From $0.01<span>/call</span></div>
-        <p class="desc">Use x402-compatible MCP clients or an xpay proxy to pay only when an agent runs a paid verification tool. Best before you need saved monitor history.</p>
+        <h2>Paid Plan</h2>
+        <div class="price">$${PAID_PLAN_PRICE_USD}<span>/month</span></div>
+        <p class="desc">Single subscription unlocks all 7 paid verification tools with unlimited usage. Best for agents that need reliable verification.</p>
         <ul>
-          <li>No monthly subscription required</li>
-          <li>Per-tool USDC pricing via x402</li>
-          <li>Works with x402-aware clients or an xpay proxy</li>
-          <li>Best for autonomous agents and variable workloads</li>
-        </ul>
-        <div class="price-list">
-          <strong>Per-tool pricing (optimized for conversion)</strong><br>
-          <em>High-frequency verification tools:</em><br>
-          <code>check_pricing</code> $${AGENTIC_TOOL_PRICES_USD.check_pricing.toFixed(2)} <span style="color: #22c55e;">↓ Reduced</span><br>
-          <code>verify_claim</code> $${AGENTIC_TOOL_PRICES_USD.verify_claim.toFixed(2)}<br>
-          <code>estimate_market</code> $${AGENTIC_TOOL_PRICES_USD.estimate_market.toFixed(2)}<br>
-          <em>Advanced analysis tools:</em><br>
-          <code>compare_pricing_pages</code> $${AGENTIC_TOOL_PRICES_USD.compare_pricing_pages.toFixed(3)}<br>
-          <code>test_hypothesis</code> $${AGENTIC_TOOL_PRICES_USD.test_hypothesis.toFixed(2)}<br>
-        </div>
-        <a href="/#mcp-setup" class="btn btn-outline" style="margin-top: 24px;">See Agentic Setup</a>
-      </div>
-
-      <div class="plan">
-        <h2>Team</h2>
-        <div class="price">$${TEAM_PLAN_MONTHLY_PRICE_USD}<span>/month</span></div>
-        <p class="desc">Use a team API key for shared monitors, change reports, broader verification, and predictable spend.</p>
-        <ul>
-          <li>Requires <strong>X-API-Key</strong></li>
-          <li>Billing must be active</li>
-          <li>${PRO_MONTHLY_LIMIT.toLocaleString()} requests per calendar month by default</li>
-          <li>Usage tracked per API key and tool</li>
-          <li>Includes pricing, compliance, market, competitor, and hypothesis tools</li>
-          <li>Monitor management and generated change reports for shared workflows</li>
+          <li>Requires <strong>X-API-Key</strong> (generated after checkout)</li>
+          <li>Billing must be active via Stripe</li>
+          <li>${PAID_MONTHLY_LIMIT.toLocaleString()} requests per calendar month included</li>
+          <li>Usage tracked per API key</li>
+          <li>Includes all 7 paid tools: <strong>check_pricing</strong>, <strong>estimate_market</strong>, <strong>compare_competitors</strong>, <strong>compare_pricing_pages</strong>, <strong>test_hypothesis</strong>, <strong>assess_compliance_posture</strong>, and <strong>verify_claim</strong></li>
           <li>Unlimited <strong>verify_claim</strong> calls</li>
+          <li>Create and run saved monitors with evidence history</li>
+          <li>Monitor management and generated change reports</li>
         </ul>
-        <form action="/api/checkout?plan=team" method="POST">
-          <button type="submit" class="btn btn-primary">Subscribe Team Plan</button>
+        <form action="/api/checkout?plan=paid" method="POST">
+          <button type="submit" class="btn btn-primary">Subscribe Now</button>
         </form>
       </div>
     </div>
 
     <div class="note">
-      <strong>How to choose:</strong> Free is for proving the MCP connection. <strong>Starter</strong> ($${STARTER_PLAN_MONTHLY_PRICE_USD}/month) is for individual saved monitors and evidence history. <strong>Agentic</strong> is for pay-per-tool-call automation with x402 or xpay. <strong>Team</strong> ($${TEAM_PLAN_MONTHLY_PRICE_USD}/month) is for shared monitor workflows, reports, and ${PRO_MONTHLY_LIMIT.toLocaleString()} monthly requests.
+      <strong>How it works:</strong> Free tier is for proving the MCP connection. The <strong>Paid Plan</strong> ($${PAID_PLAN_PRICE_USD}/month) unlocks all 7 paid verification tools with ${PAID_MONTHLY_LIMIT.toLocaleString()} included requests per month.
     </div>
 
     <div class="faq">
@@ -4170,16 +4137,12 @@ export default {
           <dd>No. <strong>check_endpoint</strong>, <strong>inspect_security_headers</strong>, and <strong>list_resources</strong> work immediately with no signup. <strong>verify_claim</strong> is also free for up to 5 calls per calendar month. No API key required for any free tier tool.</dd>
         </div>
         <div class="faq-item">
-          <dt>How do agentic payments work?</dt>
-          <dd>Paid tools advertise x402 pricing metadata with tiered per-tool pricing. An x402-aware client, or an xpay proxy in front of this server, can pay per tool call automatically using USDC. High-frequency tools like <strong>check_pricing</strong> cost just $${AGENTIC_TOOL_PRICES_USD.check_pricing.toFixed(2)}, while advanced analysis tools like <strong>test_hypothesis</strong> cost $${AGENTIC_TOOL_PRICES_USD.test_hypothesis.toFixed(2)} per call.</dd>
+          <dt>What's included in the Paid Plan?</dt>
+          <dd>All 7 paid tools are unlocked with a single $${PAID_PLAN_PRICE_USD}/month subscription: <strong>check_pricing</strong>, <strong>estimate_market</strong>, <strong>compare_competitors</strong>, <strong>compare_pricing_pages</strong>, <strong>test_hypothesis</strong>, <strong>assess_compliance_posture</strong>, and <strong>verify_claim</strong> (unlimited).</dd>
         </div>
         <div class="faq-item">
           <dt>What happens if I cancel my plan?</dt>
-          <dd>Your API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong>, <strong>inspect_security_headers</strong>, <strong>list_resources</strong>, and up to 5 <strong>verify_claim</strong> calls per month, or switch to the agentic pay-per-use path.</dd>
-        </div>
-        <div class="faq-item">
-          <dt>What's the difference between Starter and Team plans?</dt>
-          <dd><strong>Starter</strong> ($${STARTER_PLAN_MONTHLY_PRICE_USD}/month) gives you individual API-key access, saved monitors, and ${STARTER_MONTHLY_LIMIT.toLocaleString()} verifications. <strong>Team</strong> ($${TEAM_PLAN_MONTHLY_PRICE_USD}/month) gives you shared monitor workflows, change reports, and ${PRO_MONTHLY_LIMIT.toLocaleString()} requests. Both include all paid tools with unlimited <strong>verify_claim</strong> calls.</dd>
+          <dd>Your API key loses paid access immediately. You can still use the free tier for <strong>check_endpoint</strong>, <strong>inspect_security_headers</strong>, <strong>list_resources</strong>, and up to 5 <strong>verify_claim</strong> calls per month.</dd>
         </div>
       </dl>
     </div>
@@ -4199,24 +4162,11 @@ export default {
     // Stripe checkout session
     // ───────────────────────────────────────────────
     if (url.pathname === "/api/checkout" && request.method === "POST") {
+      queueTrafficLog("checkout_start");
       try {
         const stripe = env.STRIPE_SECRET_KEY;
-        const plan = url.searchParams.get("plan");
-        
-        // Select price ID based on plan
-        let stripePriceId: string;
-        let quota: number;
-        if (plan === "starter") {
-          stripePriceId = env.STRIPE_STARTER_PRICE_ID || DEFAULT_STRIPE_STARTER_PRICE_ID;
-          quota = STARTER_MONTHLY_LIMIT;
-        } else if (plan === "team") {
-          stripePriceId = env.STRIPE_TEAM_PRICE_ID || DEFAULT_STRIPE_TEAM_PRICE_ID;
-          quota = PRO_MONTHLY_LIMIT;
-        } else {
-          // Default to Team plan for backwards compatibility
-          stripePriceId = env.STRIPE_PRICE_ID || env.STRIPE_TEAM_PRICE_ID || DEFAULT_STRIPE_TEAM_PRICE_ID;
-          quota = PRO_MONTHLY_LIMIT;
-        }
+        const stripePriceId = env.STRIPE_PRICE_ID;
+        const quota = PAID_MONTHLY_LIMIT;
         
         // Create Stripe checkout session
         const checkoutResponse = await fetch("https://api.stripe.com/v1/checkout/sessions", {
@@ -4230,9 +4180,9 @@ export default {
             "line_items[0][price]": stripePriceId,
             "line_items[0][quantity]": "1",
             "mode": "subscription",
-            "success_url": `${url.origin}/api/success?session_id={CHECKOUT_SESSION_ID}&plan=${plan || 'team'}`,
+            "success_url": `${url.origin}/api/success?session_id={CHECKOUT_SESSION_ID}&plan=paid`,
             "cancel_url": `${url.origin}/pricing`,
-            "metadata[plan]": plan || "team",
+            "metadata[plan]": "paid",
             "metadata[quota]": String(quota),
           }),
         });
@@ -4252,8 +4202,9 @@ export default {
     // Success page (display API key)
     // ───────────────────────────────────────────────
     if (url.pathname === "/api/success") {
+      queueTrafficLog("checkout_success");
       const sessionId = url.searchParams.get("session_id");
-      const plan = url.searchParams.get("plan"); // 'starter' or 'team'
+      const plan = url.searchParams.get("plan"); // retained for backwards compatibility
       if (!sessionId) {
         return new Response("Missing session_id", { status: 400 });
       }
@@ -4271,9 +4222,8 @@ export default {
           metadata?: { plan?: string; quota?: string };
         };
         
-        // Determine quota based on plan from metadata or query param
-        const effectivePlan = session.metadata?.plan || plan || "team";
-        const quota = effectivePlan === "starter" ? STARTER_MONTHLY_LIMIT : PRO_MONTHLY_LIMIT;
+        // Single paid plan with fixed quota
+        const quota = PAID_MONTHLY_LIMIT;
         
         // Check if API key already exists for this customer
         const existingKeysList = await env.API_KEYS.list({ prefix: "gt_live_" });
@@ -4388,7 +4338,7 @@ export default {
   <div class="container">
     <div class="success-icon">🎉</div>
     <h1>Welcome to Ground Truth!</h1>
-    <p>Your ${effectivePlan === 'starter' ? 'Starter' : 'Team'} subscription is active. Here's your API key:</p>
+    <p>Your Paid subscription is active. Here's your API key:</p>
     
     <div class="api-key-box" id="apiKeyBox">
       ${apiKey}
@@ -4399,7 +4349,7 @@ export default {
       <h3>How to Use Your API Key</h3>
       <p>Direct MCP over HTTP is session-based. Initialize once, then send your API key on tool calls:</p>
       <pre>X-API-Key: ${apiKey}</pre>
-      <p style="margin-top: 15px;">Monthly quota: ${quota.toLocaleString()} tool requests (${effectivePlan === 'starter' ? 'Starter' : 'Team'} plan).</p>
+      <p style="margin-top: 15px;">Monthly quota: ${quota.toLocaleString()} tool requests (Paid plan). Includes all 7 paid tools.</p>
       
       <p style="margin-top: 15px;">Example with curl:</p>
       <pre>SESSION_ID="$(curl -i -s -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
@@ -4448,6 +4398,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     // Stripe webhook handler
     // ───────────────────────────────────────────────
     if (url.pathname === "/api/webhook" && request.method === "POST") {
+      queueTrafficLog("stripe_webhook");
       const signature = request.headers.get("stripe-signature");
       if (!signature) {
         return new Response("Missing signature", { status: 400 });
@@ -4516,6 +4467,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     // check_pricing tool. IP rate-limited; does not touch billing.
     // ───────────────────────────────────────────────
     if (url.pathname === "/api/try" && request.method === "POST") {
+      queueTrafficLog("browser_try");
       const PLAYGROUND_DAILY_LIMIT = 25;
       try {
         const payload = (await request.json().catch(() => null)) as
@@ -4605,7 +4557,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           return jsonResponse({
             tool: "check_pricing",
             tier: "paid-preview",
-            note: "Free in-browser preview of a paid tool. Pay-per-call via x402 or a team API key when calling it from an agent.",
+            note: "Free in-browser preview of a paid tool. Subscribe for team-key access when you need recurring monitors and change history.",
             url: normalizedUrl,
             status: resp.status,
             accessible: resp.ok,
@@ -4637,6 +4589,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
     // Root page
     // ───────────────────────────────────────────────
     if (url.pathname === "/") {
+      queueTrafficLog("home_page");
       return new Response(
         `<!DOCTYPE html>
 <html lang="en">
@@ -4645,7 +4598,7 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ground Truth - First Tool Call for AI Agents</title>
-  <meta name="description" content="🎯 ACTIVATION TEST: Paste 'Use check_endpoint with url=https://example.com' - works instantly, no signup. Primary activation signal for AI agents.">
+  <meta name="description" content="Free first MCP call: run check_endpoint with url=https://example.com. Paid plans add saved monitors, scheduled checks, evidence history, and change reports.">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -5070,25 +5023,25 @@ curl -X POST https://ground-truth-mcp.anishdasmail.workers.dev/mcp \\
           </ul>
         </div>
         <div class="plan pro">
-          <div class="label">Agentic</div>
-          <h3>Pay per tool call</h3>
-          <div class="price">From $0.01<span>/call</span></div>
-          <p>Useful for autonomous agents, MCP clients with x402, or an xpay proxy before you need persistent monitor history.</p>
+          <div class="label">Paid</div>
+          <h3>Monitored evidence</h3>
+          <div class="price">$${PAID_PLAN_PRICE_USD}<span>/month</span></div>
+          <p>Best for agents that need saved monitors, scheduled checks, and change reports after the free first call proves the connection.</p>
           <ul>
-            <li>Per-tool USDC pricing</li>
-            <li>No monthly commitment</li>
-            <li>Works well for variable workloads</li>
-            <li>Includes pricing, compliance, security, market, and hypothesis tools</li>
+            <li>Single subscription</li>
+            <li>Includes all paid verification tools</li>
+            <li>Saved monitors with evidence history</li>
+            <li>Change reports for teams and agents</li>
           </ul>
         </div>
         <div class="plan">
           <div class="label">Team</div>
           <h3>Team monitor plan</h3>
-          <div class="price">$${TEAM_PLAN_MONTHLY_PRICE_USD}<span>/month</span></div>
+          <div class="price">$${PAID_PLAN_PRICE_USD}<span>/month</span></div>
           <p>Best for internal teams that want saved monitors, change reports, predictable spend, shared access, and a familiar API-key workflow.</p>
           <ul>
             <li>Requires <code>X-API-Key</code></li>
-            <li>${PRO_MONTHLY_LIMIT.toLocaleString()} requests per calendar month by default</li>
+            <li>${PAID_MONTHLY_LIMIT.toLocaleString()} requests per calendar month by default</li>
             <li>Usage tracked per API key and tool</li>
             <li>Includes all paid verification tools</li>
             <li>Saved monitors and generated change reports</li>
@@ -5187,7 +5140,7 @@ console.log(result);</div>
 
     <section id="mcp-setup">
       <h2>MCP setup</h2>
-      <p class="mcp-note"><strong>MCP</strong> stands for Model Context Protocol. Ground Truth works as a direct MCP server for team API-key access, and its paid tools also advertise x402 pricing metadata for agentic pay-per-use or an xpay proxy flow.</p>
+      <p class="mcp-note"><strong>MCP</strong> stands for Model Context Protocol. Ground Truth works as a direct MCP server for team API-key access. If you operate the separate xpay proxy deployment, use that proxy URL for pay-per-call clients.</p>
       <div class="setup-grid">
         <div class="setup-card">
           <h3>Claude Desktop</h3>
@@ -5212,7 +5165,7 @@ console.log(result);</div>
 }</pre>
         </div>
       </div>
-      <p class="mcp-note" style="margin-top: 18px;">If you want turnkey pay-per-tool billing for clients that do not natively handle x402 yet, register this server URL with xpay and share the resulting proxy URL instead.</p>
+      <p class="mcp-note" style="margin-top: 18px;">For this production deployment, use the team plan and API key after the free first call. Keep xpay for the separate pay-per-call proxy deployment only.</p>
     </section>
 
     <section id="use-cases">
@@ -5253,6 +5206,7 @@ console.log(result);</div>
     // Stats endpoint
     // ───────────────────────────────────────────────
     if (url.pathname === "/stats") {
+      queueTrafficLog("stats_view");
       try {
         const id = env.MCP_OBJECT.idFromName("ground-truth");
         const stub = env.MCP_OBJECT.get(id);
