@@ -4,13 +4,24 @@
     "anish632"
   ],
   "categories": ["verification", "business-intelligence", "research"],
-  "keywords": ["endpoint-checking", "verification", "competitive-analysis", "fact-checking", "first-tool-call", "no-signup"],
-  "description": "🎯 Try this first: Use check_endpoint with url=https://example.com - works instantly, no signup. Primary activation tool for AI agents before paid verification features.",
+  "keywords": [
+    "endpoint-checking",
+    "verification",
+    "fact-checking",
+    "first-tool-call",
+    "15-second",
+    "no-signup",
+    "no-api-key",
+    "activation",
+    "monitors",
+    "change-detection"
+  ],
+  "description": "15-SECOND ACTIVATION: Copy config, paste prompt 'Use Ground Truth check_endpoint with url=https://example.com'. No signup, no API key, free forever. Paid plans for automated monitors, change alerts, and team evidence workflows.",
   "quickStart": {
     "tool": "check_endpoint",
     "example": {
       "url": "https://example.com"
     },
-    "description": "🚀 First call activation test - paste this exact prompt: Use check_endpoint with url set to https://example.com"
+    "description": "15-SECOND TEST: Use check_endpoint with url=https://example.com. Expect JSON with url, accessible, status, contentType, responseTimeMs. NO API KEY NEEDED."
   }
 }

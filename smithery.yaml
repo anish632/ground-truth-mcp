@@ -6,14 +6,15 @@ startCommand:
     properties:
       apiKey:
         type: string
-        title: Team API Key (Optional - Skip For First Call)
+        title: Team API Key (NOT NEEDED FOR FIRST CALL)
         description: >-
-          🎯 ACTIVATION TEST: Try check_endpoint with url=https://example.com first - NO API KEY NEEDED!
-          This proves your MCP connection works. Only add API key after this succeeds for team/paid features.
+          ACTIVATION FIRST: Use check_endpoint with url=https://example.com with NO API key to verify connection.
+          Only add X-API-Key AFTER successful activation for team features: saved monitors, scheduled checks,
+          evidence history, change reports, and all paid verification tools.
         default: ""
     required: []
 quickStart:
   tool: check_endpoint
   example:
     url: "https://example.com"
-  description: "🚀 PASTE THIS PROMPT: Use check_endpoint with url set to https://example.com"
+  description: "15-SECOND ACTIVATION: Use check_endpoint with url=https://example.com. No signup, no API key, just works. Expect JSON response with url, accessible, status, contentType, and responseTimeMs."
