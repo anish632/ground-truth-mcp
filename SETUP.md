@@ -2,7 +2,7 @@
 
 This internal guide covers how to deploy Ground Truth, provision billing, and verify both the team-plan and agentic-payment flows.
 
-Ground Truth is positioned publicly as a verification layer for AI agents. Keep that language consistent in future updates, and explain MCP only after the product value is clear.
+Ground Truth is positioned publicly as competitive change evidence for B2B SaaS teams and their agents. The product-led activation path is three persistent monitors free in `/watch`; preflight tools support that core workflow.
 
 ---
 
@@ -10,16 +10,17 @@ Ground Truth is positioned publicly as a verification layer for AI agents. Keep 
 
 - Billing and API key routes are implemented in `src/index.ts`
 - API keys are stored in the `API_KEYS` KV namespace
-- Free access covers `check_endpoint` and `inspect_security_headers`
+- Free access includes three persistent daily or weekly monitors, 100 monitor actions/month, core preflight tools, and a limited `verify_claim` allowance
 - Paid tools support both team API-key billing and x402-compatible pay-per-use
 - The server publishes MCP metadata at `/.well-known/mcp/server-card.json`
+- The Worker Durable Object exposes rolling unique/repeat-user and paid-usage metrics at `/stats`
 
 Current Stripe resources:
 
 - Product ID: `prod_UBSfvgyWW9XI3J`
 - Price ID: `price_1TD5jiKOR3CPCI6H5nBr8KV8`
 - Webhook ID: `we_1TD5jiKOR3CPCI6HatiUuysC`
-- Webhook secret: `whsec_Q3eNylg2aOnkZkMWLv15Xvq5uDDHhYoz`
+- Webhook secret: stored as the `STRIPE_WEBHOOK_SECRET` Worker secret; never commit the value
 - Webhook URL: `https://ground-truth-mcp.anishdasmail.workers.dev/api/webhook`
 
 These are live production Stripe resources. Reuse them unless pricing or billing structure changes.
@@ -44,14 +45,32 @@ npx wrangler secret put STRIPE_SECRET_KEY
 npx wrangler secret put STRIPE_WEBHOOK_SECRET
 ```
 
-Use your Stripe secret key for `STRIPE_SECRET_KEY` and the webhook secret above for `STRIPE_WEBHOOK_SECRET`.
+Use your Stripe secret key for `STRIPE_SECRET_KEY` and retrieve the signing secret from Stripe for `STRIPE_WEBHOOK_SECRET`.
+
+Optional secrets for recurring-revenue features:
+
+```bash
+# Email change alerts (lets monitors use mailto: destinations). Omit to keep
+# webhook + Slack alerts only; mailto: monitors are then rejected at creation.
+npx wrangler secret put RESEND_API_KEY
+# Annual billing (2 months free). Create a yearly Stripe price per tier, then:
+npx wrangler secret put STRIPE_PRICE_ID_ANNUAL         # Monitor  $90/yr
+npx wrangler secret put STRIPE_PRICE_ID_BETTER_ANNUAL  # Team     $290/yr
+npx wrangler secret put STRIPE_PRICE_ID_BEST_ANNUAL    # Scale    $990/yr
+```
+
+`RESEND_FROM` (optional var) sets the From address for email alerts. Annual pricing only appears on `/pricing` for the tiers whose annual price ID is configured; without it, checkout stays monthly-only.
 
 ### 3. Optional environment variables
 
 Runtime flags:
 
 - `GROUND_TRUTH_TELEMETRY=false`
-  Disables remote telemetry while keeping local usage logs in the Durable Object SQLite store.
+  Disables the optional external telemetry sink. Stable usage and funnel events remain in the Worker Durable Object and are available from `/stats`.
+- `GROUND_TRUTH_TELEMETRY_ENDPOINT=https://...`
+  Optional external telemetry sink. It is only used when `GROUND_TRUTH_TELEMETRY=true`; the product does not depend on this endpoint.
+- `GROUND_TRUTH_DEPLOYMENT_MODE=xpay_upstream`
+  Used by the separate xpay deployment. Analytics also records the deployment inferred from the hostname (`main` or `xpay`).
 - `GROUND_TRUTH_AGENTIC_PAYMENTS=false`
   Turns off direct x402 payment handling and leaves the team plan as the only paid path.
 - `STRIPE_PRICE_ID=price_...`
@@ -81,6 +100,7 @@ npx wrangler dev
 Check these routes:
 
 - `http://localhost:8787/`
+- `http://localhost:8787/watch`
 - `http://localhost:8787/pricing`
 - `http://localhost:8787/mcp`
 - `http://localhost:8787/.well-known/mcp/server-card.json`
@@ -104,17 +124,17 @@ curl -X POST http://localhost:8787/mcp \
   -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://example.com"}},"id":1}'
 ```
 
-First-call activation smoke test:
+Preflight smoke test:
 
 ```bash
 curl -X POST http://localhost:8787/mcp \
   -H "Accept: application/json, text/event-stream" \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $MCP_SESSION_ID" \
-  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"check_endpoint","arguments":{"url":"https://example.com"}},"id":1}'
+  -d '{"jsonrpc":"2.0","method":"tools/call","params":{"name":"preflight_endpoint","arguments":{"url":"https://example.com"}},"id":1}'
 ```
 
-The activation event is a successful `check_endpoint` result with `accessible`, `status`, and `responseTimeMs` in the returned structured content.
+The preflight result includes `verdict`, `summary`, `evidence`, and `recommended_action`, while preserving the underlying endpoint and header fields.
 
 Agentic unpaid paid-tool smoke test:
 
@@ -163,6 +183,14 @@ Production base URL:
 
 `https://ground-truth-mcp.anishdasmail.workers.dev`
 
+Immediately confirm the MCP transport is healthy (this is the first thing an agent hits):
+
+```bash
+curl -s https://ground-truth-mcp.anishdasmail.workers.dev/health/mcp
+```
+
+Expect `{"ok":true,"verdict":"PASS",...}` with HTTP 200. A `FAIL` (HTTP 503) means the `initialize` handshake is broken — the `detail` field carries the real error. Point an external uptime check (or a Ground Truth monitor) at this URL so any future transport outage pages you instead of silently zeroing activation.
+
 ### 6. Verify checkout and API key flow
 
 Use the existing live product and price above. Do not create a second production product for the same team plan unless pricing intentionally changes.
@@ -210,6 +238,8 @@ stripe trigger checkout.session.completed
 ### Free
 
 - `check_endpoint`
+- `inspect_security_headers`
+- `preflight_endpoint`
 - 100 requests per calendar month
 - No API key required
 
@@ -252,22 +282,23 @@ Example:
 
 ### xpay
 
-- xpay API key (public): `xpay_pk_vMuXB-Wm8HRywQQc1KdurlfxhGWHoMDu`
-- Register the production `/mcp` URL with xpay if you want a managed pay-per-tool proxy
+- Store any xpay credential as a Worker secret; do not place it in Wrangler vars or commit it
+- Register the production `/mcp` URL with xpay if you want a managed pay-per-tool proxy for paid tools
 - Use the production MCP URL: `https://ground-truth-mcp.anishdasmail.workers.dev/mcp`
 - Recommended provider slug: `ground-truth`
 - xpay can auto-discover tools from the live server or the server card at `https://ground-truth-mcp.anishdasmail.workers.dev/.well-known/mcp/server-card.json`
 - Start with per-tool pricing that matches the Worker metadata:
   - `estimate_market` → `$0.01`
-  - `check_pricing` → `$0.02`
-  - `compare_competitors` → `$0.03`
-  - `compare_pricing_pages` → `$0.04`
-  - `verify_claim` → `$0.05`
-  - `assess_compliance_posture` → `$0.05`
+  - `check_pricing` → `$0.01`
+  - `compare_competitors` → `$0.025`
+  - `compare_pricing_pages` → `$0.035`
+  - `verify_claim` → `$0.01`
+  - `assess_compliance_posture` → `$0.06`
   - `test_hypothesis` → `$0.05`
 - Publish the resulting proxy URL anywhere you want agentic usage without native x402 support
 - For a dedicated xpay upstream, deploy the separate Worker with `npm run deploy:xpay`
 - The xpay-specific upstream URL is `https://ground-truth-mcp-xpay.anishdasmail.workers.dev/mcp`
+- Keep the direct hosted server for free preflight and team API-key access; use xpay for the proxy deployment
 - Configure xpay upstream auth with:
   - Header: `X-Ground-Truth-Xpay-Secret`
   - Value: the `GROUND_TRUTH_XPAY_UPSTREAM_SECRET` secret configured on the xpay Worker
@@ -288,25 +319,26 @@ Example:
   - Namespace / Server ID: `anishdasmail / ground-truth`
   - MCP Server URL: `https://ground-truth-mcp.anishdasmail.workers.dev/mcp`
 - Publish the production remote MCP URL
+- Use the preflight copy: `No API key is required for the free preflight. Start by calling preflight_endpoint with url=https://example.com.`
 - Recommended namespace/server slug: `anishdasmail / ground-truth`
 - Point Smithery to `https://ground-truth-mcp.anishdasmail.workers.dev/mcp`
 - The `/.well-known/mcp/server-card.json` route is available as metadata fallback
 - If Smithery's scan is blocked by Cloudflare bot protection, allow `SmitheryBot/1.0` or rely on the static server card
-- Use this first-call profile note: `No API key is required for the first check_endpoint call. Start by calling check_endpoint with url=https://example.com.`
+- Use this preflight profile note: `No API key is required for the free preflight. Start by calling preflight_endpoint with url=https://example.com.`
 
 ### Profile copy snippets
 
 Short description:
 
-> First tool call for AI agents: call `check_endpoint` with `url=https://example.com` to verify Ground Truth is connected. No signup or API key for the first endpoint check.
+> Preflight first: call `preflight_endpoint` with `url=https://example.com` before an agent trusts the resource. No signup or API key is required for the free preflight.
 
 Quickstart:
 
-> Use Ground Truth's `check_endpoint` tool with `url` set to `https://example.com`. Do not answer from memory. Call the tool and return exactly: `url`, `accessible`, `status`, `contentType`, and `responseTimeMs`.
+> Use Ground Truth's `preflight_endpoint` tool with `url` set to `https://example.com`. Return `verdict`, `summary`, `evidence`, and `recommended_action`.
 
 Release note:
 
-> Improved first-call activation with a no-key 60-second quickstart, one copy-paste `check_endpoint` prompt, example input/output, clearer free-vs-paid setup, and troubleshooting for MCP client connection issues.
+> Repositioned around preflighting unfamiliar APIs, URLs, and claims with PASS/WARN/FAIL evidence, clearer free-vs-paid usage, and rolling usage analytics.
 
 ### MCP Market
 
@@ -349,10 +381,20 @@ Release note:
 
 ---
 
+## Analytics event taxonomy
+
+The Worker records the following canonical events when the corresponding action occurs:
+
+`homepage_view`, `pricing_view`, `mcp_connection`, `tool_call_started`, `tool_call_completed`, `tool_call_failed`, `payment_required`, `checkout_started`, `checkout_completed`, `subscription_activated`, and `paid_tool_call`.
+
+Checkout starts are keyed to a generated checkout request ID and carried into Stripe metadata. Webhook and success-page completion events use that same key and are deduplicated. If a Stripe checkout originates outside this Worker, the webhook backfills a start event. `/stats` also normalizes the displayed start count to never be lower than completed checkouts and exposes the raw count and coverage ratio separately.
+
+The event payload stores `ts`, hashed `clientHash`, optional `mcpClientId`, `tool`, `tier`, `status`, `paymentMethod`, `source`, `deployment`, and `serverVersion`; request payload contents are not stored. Usage events are queued with `waitUntil` to keep MCP latency unchanged, so a hard termination can lose an individual non-billing event. Stripe success-page and webhook delivery can arrive in either order, which is why the checkout key, deduplication, raw counts, and coverage ratio are retained.
+
 ## Maintenance Notes
 
-- Keep public and internal copy centered on "verification layer for AI agents"
-- Introduce MCP after the value proposition, not before
+- Keep public and internal copy centered on preflighting external resources before agent trust or action
+- Introduce MCP after the preflight workflow, not before
 - If pricing changes, update Stripe, `src/index.ts`, `README.md`, and `API_USAGE.md` together
 - If agentic prices change, update `AGENTIC_TOOL_PRICES_USD`, the pricing page copy, and the server card together
 - The current live Stripe dashboard label is `Ground Truth MCP`; rename it to `Ground Truth` only if you want tighter branding consistency

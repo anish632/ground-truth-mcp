@@ -1,8 +1,8 @@
 {
 	"name": "ground-truth-mcp",
-	"version": "0.5.1",
+	"version": "0.9.0",
 	"mcpName": "io.github.anish632/ground-truth",
-	"description": "✅ Working in 60 seconds: Call check_endpoint with url=https://example.com. No signup, no API key. Stop your AI agents from being wrong with live data verification.",
+	"description": "Track competitor pricing, packaging, APIs, and public claims with three free persistent monitors and evidence-backed change signals.",
 	"keywords": [
 		"mcp",
 		"mcp-server",
@@ -26,7 +26,8 @@
 		"live-data",
 		"cloudflare-workers",
 		"x402",
-		"first-tool-call",
+		"preflight",
+		"pass-warn-fail",
 		"endpoint-check",
 		"list-resources"
 	],
@@ -43,21 +44,23 @@
 		"build:xpay": "wrangler deploy --dry-run --config wrangler.xpay.jsonc",
 		"cf-typegen": "wrangler types --env-interface Env",
 		"typecheck": "tsc --noEmit",
-		"test": "echo 'Tests would run here - placeholder for quality score'",
+		"test": "vitest run",
 		"test:usage": "bash ./test-usage-enforcement.sh",
 		"test:x402": "node test-x402-payment.mjs"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.11.0",
 		"@x402/core": "^2.3.1",
 		"@x402/evm": "^2.3.1",
-		"@modelcontextprotocol/sdk": "^1.11.0",
 		"agents": "^0.4.0",
 		"viem": "^2.46.2",
 		"zod": "^3.24.0"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20250204.0",
-		"typescript": "^5.7.3",
+		"@types/node": "^26.4.1",
+		"linkedom": "^0.18.13",
+		"typescript": "^5.9.3",
 		"vitest": "^2.0.0",
 		"wrangler": "^4.0.0"
 	}
