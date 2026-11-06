@@ -4,7 +4,7 @@ import { parseHTML } from "linkedom";
 import { runInNewContext } from "node:vm";
 import { getWatchDashboardHtml } from "./watch-dashboard";
 
-async function dashboard(options: { paid?: boolean; failBaseline?: boolean; manual?: boolean } = {}) {
+async function dashboard(options: { paid?: boolean; failBaseline?: boolean; manual?: boolean; monitorCount?: number } = {}) {
   const { document, window } = parseHTML(getWatchDashboardHtml());
   const storage = new Map<string, string>();
   const calls: { path: string; body: Record<string, any>; headers: Record<string, string> }[] = [];
@@ -25,7 +25,7 @@ async function dashboard(options: { paid?: boolean; failBaseline?: boolean; manu
     };
     else if (path.startsWith("/api/checkout")) data = { checkoutUrl: "https://checkout.stripe.com/test" };
     else if (path === "/api/preview-monitor") data = { status: "baseline_ready", baseline: { pricesFound: ["$9", "$29", "$99"], plansDetected: ["Monitor", "Team", "Scale"] } };
-    else if (body.action === "list_monitors") data = { monitors: saved, total: saved.length, active_monitor_limit: 3, remaining_active_slots: 3 - saved.length };
+    else if (body.action === "list_monitors") data = { monitors: saved, total: options.monitorCount ?? saved.length, active_monitor_limit: 3, remaining_active_slots: 3 - (options.monitorCount ?? saved.length) };
     else if (body.action === "create_monitor") {
       const monitor = { id: "mon_test", ...body.arguments, last_run_at: "2026-09-05T01:00:00Z" };
       saved.push(monitor); data = monitor;
@@ -62,6 +62,22 @@ describe("Watch dashboard customer flows", () => {
     expect(checkout.headers["X-API-Key"]).toBe("gt_free_test_private");
     expect(checkout.path).not.toContain("gt_free_");
     expect(location.href).toBe("https://checkout.stripe.com/test");
+  });
+
+  it("surfaces the paid value when one free monitor slot remains", async () => {
+    const { document } = await dashboard({ monitorCount: 2 });
+    expect(document.getElementById("growth-prompt")!.hidden).toBe(false);
+    expect(document.getElementById("growth-prompt")!.textContent).toContain("One free monitor slot left");
+    expect(document.getElementById("upgrade")!.textContent).toContain("$9/mo");
+  });
+
+  it("opens plan choices instead of making a doomed fourth-monitor request", async () => {
+    const { document, window, calls } = await dashboard({ monitorCount: 3 });
+    (document.getElementById("target") as any).value = "https://another-competitor.test/pricing";
+    document.getElementById("create-form")!.dispatchEvent(new window.Event("submit", { cancelable: true }));
+    expect(document.getElementById("plans")!.hidden).toBe(false);
+    expect(document.getElementById("notice")!.textContent).toContain("watchlist is full");
+    expect(calls.some(call => call.body.action === "create_monitor")).toBe(false);
   });
 
   it.each([false, true])("exposes hourly scheduling only when the server grants it (paid=%s)", async (paid) => {
